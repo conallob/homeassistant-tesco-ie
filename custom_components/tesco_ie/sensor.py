@@ -387,8 +387,8 @@ class TescoDiagnosticSensor(TescoBaseSensor):
         entry_data = self.hass.data.get("tesco_ie", {}).get(self._entry.entry_id, {})
         if "api" in entry_data:
             api = entry_data["api"]
-            attrs["session_active"] = api._logged_in
-            attrs["has_csrf_token"] = api._csrf_token is not None
+            attrs["session_active"] = api.is_logged_in
+            attrs["has_csrf_token"] = api.has_csrf_token
 
         if self.coordinator.last_exception:
             attrs["last_error"] = str(self.coordinator.last_exception)

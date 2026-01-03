@@ -114,7 +114,12 @@ class TescoAPI:
     """Tesco Ireland API client using web scraping."""
 
     def __init__(
-        self, email: str, password: str, timeout: int = DEFAULT_TIMEOUT
+        self,
+        email: str,
+        password: str,
+        timeout: int = DEFAULT_TIMEOUT,
+        rate_limit_read: float = RATE_LIMIT_DELAY_READ,
+        rate_limit_write: float = RATE_LIMIT_DELAY_WRITE,
     ) -> None:
         """Initialize the API client.
 
@@ -122,16 +127,22 @@ class TescoAPI:
             email: Tesco account email
             password: Tesco account password
             timeout: Request timeout in seconds (default: 30)
+            rate_limit_read: Rate limit for read operations in seconds (default: 1.0)
+            rate_limit_write: Rate limit for write operations in seconds (default: 2.0)
         """
         self.email = email
         self.password = password
         self.timeout = timeout
+        self.rate_limit_read = rate_limit_read
+        self.rate_limit_write = rate_limit_write
         self._session: aiohttp.ClientSession | None = None
         self._cookie_jar: CookieJar | None = None
         self._logged_in = False
         self._csrf_token: str | None = None
         self._last_request_time_read: float | None = None
         self._last_request_time_write: float | None = None
+        self._failed_login_attempts = 0
+        self._last_login_attempt_time: float | None = None
 
     async def _create_session(self) -> None:
         """Create an aiohttp session with proper headers and cookie jar."""
@@ -157,6 +168,21 @@ class TescoAPI:
         else:
             _LOGGER.debug("Reusing existing session")
 
+    async def _ensure_session(self) -> None:
+        """Ensure session is initialized and valid."""
+        if self._session is None or self._session.closed:
+            await self._create_session()
+
+    @property
+    def is_logged_in(self) -> bool:
+        """Return whether the API is currently logged in (for diagnostic purposes)."""
+        return self._logged_in
+
+    @property
+    def has_csrf_token(self) -> bool:
+        """Return whether a CSRF token is available (for diagnostic purposes)."""
+        return self._csrf_token is not None
+
     async def _rate_limit(self, is_write: bool = False) -> None:
         """Implement rate limiting to avoid being blocked.
 
@@ -166,7 +192,7 @@ class TescoAPI:
         Args:
             is_write: If True, use write operation rate limit (more conservative)
         """
-        delay = RATE_LIMIT_DELAY_WRITE if is_write else RATE_LIMIT_DELAY_READ
+        delay = self.rate_limit_write if is_write else self.rate_limit_read
         last_request_time = (
             self._last_request_time_write if is_write else self._last_request_time_read
         )
@@ -251,8 +277,24 @@ class TescoAPI:
         return True
 
     async def async_login(self) -> bool:
-        """Login to Tesco Ireland using web scraping."""
+        """Login to Tesco Ireland using web scraping with exponential backoff."""
         _LOGGER.info("Authenticating with Tesco Ireland")
+
+        # Implement exponential backoff for failed login attempts
+        if self._failed_login_attempts > 0 and self._last_login_attempt_time:
+            backoff_delay = min(2**self._failed_login_attempts, 300)  # Max 5 minutes
+            elapsed = time.monotonic() - self._last_login_attempt_time
+            if elapsed < backoff_delay:
+                remaining = backoff_delay - elapsed
+                _LOGGER.warning(
+                    "Rate limiting login attempts due to %d previous failures. "
+                    "Waiting %.1f more seconds before retry.",
+                    self._failed_login_attempts,
+                    remaining,
+                )
+                await asyncio.sleep(remaining)
+
+        self._last_login_attempt_time = time.monotonic()
 
         try:
             await self._create_session()
@@ -305,6 +347,7 @@ class TescoAPI:
 
                     if found_indicators:
                         self._logged_in = True
+                        self._failed_login_attempts = 0  # Reset on success
                         _LOGGER.info("Successfully authenticated")
                         _LOGGER.debug(
                             "Login verified by indicators: %s",
@@ -320,23 +363,43 @@ class TescoAPI:
                         error_msg = " ".join(
                             elem.get_text(strip=True) for elem in error_elements[:3]
                         )
+                        self._failed_login_attempts += 1
+                        _LOGGER.warning(
+                            "Login attempt %d failed: invalid credentials",
+                            self._failed_login_attempts,
+                        )
                         raise TescoAuthError(
                             f"Login failed: {error_msg or 'Invalid credentials'}"
                         )
                 else:
+                    self._failed_login_attempts += 1
+                    _LOGGER.warning(
+                        "Login attempt %d failed: HTTP %s",
+                        self._failed_login_attempts,
+                        response.status,
+                    )
                     raise TescoAuthError(f"Login failed with status: {response.status}")
 
         except aiohttp.ClientError as err:
-            _LOGGER.error("Network error during login")
+            self._failed_login_attempts += 1
+            _LOGGER.error(
+                "Network error during login (attempt %d)", self._failed_login_attempts
+            )
             raise TescoAuthError(f"Network error: {err}") from err
+        except TescoAuthError:
+            # Re-raise TescoAuthError without incrementing counter again
+            raise
         except Exception as err:
-            _LOGGER.error("Login failed")
+            self._failed_login_attempts += 1
+            _LOGGER.error("Login failed (attempt %d)", self._failed_login_attempts)
             raise TescoAuthError(f"Failed to authenticate: {err}") from err
 
     async def async_get_data(self) -> TescoDataDict:
         """Fetch data from Tesco including Clubcard points and delivery info."""
         if not self._logged_in:
             await self.async_login()
+
+        await self._ensure_session()
 
         try:
             await self._rate_limit()
@@ -438,7 +501,16 @@ class TescoAPI:
                 re.IGNORECASE,
             )
             if date_match and not delivery_info["next_delivery"]:
-                delivery_info["delivery_slot"] = text
+                delivery_info["next_delivery"] = date_match.group(0)
+
+            # Try to extract delivery slot (time range like "10:00 - 12:00")
+            slot_match = re.search(
+                r"(\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2})",
+                text,
+                re.IGNORECASE,
+            )
+            if slot_match and not delivery_info["delivery_slot"]:
+                delivery_info["delivery_slot"] = slot_match.group(0)
 
             # Try to extract order number
             order_match = re.search(r"order\s*#?\s*(\d+)", text, re.IGNORECASE)
@@ -451,6 +523,8 @@ class TescoAPI:
         """Search for products on Tesco."""
         if not self._logged_in:
             await self.async_login()
+
+        await self._ensure_session()
 
         try:
             await self._rate_limit()
@@ -538,6 +612,8 @@ class TescoAPI:
         if not self._logged_in:
             await self.async_login()
 
+        await self._ensure_session()
+
         try:
             await self._rate_limit(is_write=True)  # Use write rate limit
 
@@ -612,6 +688,8 @@ class TescoAPI:
         """Get current basket items."""
         if not self._logged_in:
             await self.async_login()
+
+        await self._ensure_session()
 
         try:
             await self._rate_limit()

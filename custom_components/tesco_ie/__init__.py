@@ -51,28 +51,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     timeout = entry.options.get(CONF_TIMEOUT, DEFAULT_TIMEOUT)
     update_interval = entry.options.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
 
-    _LOGGER.debug(
-        "Setting up Tesco integration with timeout=%ds, update_interval=%ds",
-        timeout,
-        update_interval,
-    )
-
-    api = TescoAPI(email, password, timeout=timeout)
-
-    # Apply rate limits from options if available
+    # Get rate limits from options
     rate_limit_read = entry.options.get(CONF_RATE_LIMIT_READ, DEFAULT_RATE_LIMIT_READ)
     rate_limit_write = entry.options.get(
         CONF_RATE_LIMIT_WRITE, DEFAULT_RATE_LIMIT_WRITE
     )
 
-    # Override rate limits in API instance (update tesco_api.py constants)
-    from . import tesco_api
-
-    tesco_api.RATE_LIMIT_DELAY_READ = rate_limit_read
-    tesco_api.RATE_LIMIT_DELAY_WRITE = rate_limit_write
-
     _LOGGER.debug(
-        "Applied rate limits: read=%ss, write=%ss", rate_limit_read, rate_limit_write
+        "Setting up Tesco integration with timeout=%ds, update_interval=%ds, "
+        "rate_limit_read=%ss, rate_limit_write=%ss",
+        timeout,
+        update_interval,
+        rate_limit_read,
+        rate_limit_write,
+    )
+
+    # Create API instance with rate limits as instance attributes
+    api = TescoAPI(
+        email,
+        password,
+        timeout=timeout,
+        rate_limit_read=rate_limit_read,
+        rate_limit_write=rate_limit_write,
     )
 
     try:
@@ -149,6 +149,27 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         product_name = call.data.get("product_name")
         quantity = call.data.get("quantity", 1)
         entry_id = call.data.get("entry_id")
+
+        # Validate and sanitize product_name
+        if not product_name or not isinstance(product_name, str):
+            _LOGGER.error("Invalid product_name: must be a non-empty string")
+            return
+
+        # Sanitize product name: remove excessive whitespace and limit length
+        product_name = " ".join(product_name.split())
+        if len(product_name) > 100:
+            _LOGGER.warning("Product name too long, truncating to 100 characters")
+            product_name = product_name[:100]
+
+        # Validate characters (allow alphanumeric, spaces, and common punctuation)
+        if not all(c.isalnum() or c.isspace() or c in "'-.,&()%" for c in product_name):
+            _LOGGER.error("Product name contains invalid characters")
+            return
+
+        # Validate quantity
+        if not isinstance(quantity, int) or quantity < 1 or quantity > 99:
+            _LOGGER.error("Invalid quantity: must be between 1 and 99")
+            return
 
         # Get API instance - use specified entry_id or first available
         if entry_id:
@@ -247,6 +268,27 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         quantity = call.data.get("quantity", 1)
         entry_id = call.data.get("entry_id")
 
+        # Validate product_id
+        if not product_id or not isinstance(product_id, str):
+            _LOGGER.error("Invalid product_id: must be a non-empty string")
+            return
+
+        # Sanitize product_id and limit length
+        product_id = product_id.strip()
+        if len(product_id) > 100:
+            _LOGGER.error("Product ID too long (max 100 characters)")
+            return
+
+        # Validate characters (allow alphanumeric, underscores, hyphens)
+        if not all(c.isalnum() or c in "_-" for c in product_id):
+            _LOGGER.error("Product ID contains invalid characters")
+            return
+
+        # Validate quantity
+        if not isinstance(quantity, int) or quantity < 1 or quantity > 99:
+            _LOGGER.error("Invalid quantity: must be between 1 and 99")
+            return
+
         # Get inventory sensor - use specified entry_id or first available
         if entry_id:
             if entry_id not in hass.data.get(DOMAIN, {}):
@@ -276,6 +318,22 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         """Handle product search service."""
         query = call.data.get("query")
         entry_id = call.data.get("entry_id")
+
+        # Validate and sanitize query
+        if not query or not isinstance(query, str):
+            _LOGGER.error("Invalid query: must be a non-empty string")
+            return
+
+        # Sanitize query: remove excessive whitespace and limit length
+        query = " ".join(query.split())
+        if len(query) > 100:
+            _LOGGER.warning("Query too long, truncating to 100 characters")
+            query = query[:100]
+
+        # Validate characters
+        if not all(c.isalnum() or c.isspace() or c in "'-.,&()%" for c in query):
+            _LOGGER.error("Query contains invalid characters")
+            return
 
         # Get API instance - use specified entry_id or first available
         if entry_id:

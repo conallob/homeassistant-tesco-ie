@@ -81,7 +81,8 @@ def test_inventory_sensor_value(mock_coordinator, mock_entry):
     assert sensor.native_value == 0  # Empty inventory
 
 
-def test_inventory_add_items(mock_coordinator, mock_entry):
+@pytest.mark.asyncio
+async def test_inventory_add_items(mock_coordinator, mock_entry):
     """Test adding items to inventory."""
     sensor = TescoInventorySensor(mock_coordinator, mock_entry)
 
@@ -90,7 +91,7 @@ def test_inventory_add_items(mock_coordinator, mock_entry):
         {"name": "Bread", "quantity": 1, "unit": "loaf"},
     ]
 
-    sensor.add_items_from_receipt(items)
+    await sensor.async_add_items_from_receipt(items)
 
     assert sensor.native_value == 2  # Two unique items
     assert "milk_2l" in sensor._inventory
@@ -98,47 +99,50 @@ def test_inventory_add_items(mock_coordinator, mock_entry):
     assert "Bread" in sensor._inventory
 
 
-def test_inventory_add_duplicate_items(mock_coordinator, mock_entry):
+@pytest.mark.asyncio
+async def test_inventory_add_duplicate_items(mock_coordinator, mock_entry):
     """Test adding duplicate items increases quantity."""
     sensor = TescoInventorySensor(mock_coordinator, mock_entry)
 
     # Add first batch
     items1 = [{"id": "milk_2l", "name": "Milk 2L", "quantity": 2}]
-    sensor.add_items_from_receipt(items1)
+    await sensor.async_add_items_from_receipt(items1)
 
     assert sensor._inventory["milk_2l"]["quantity"] == 2
 
     # Add second batch
     items2 = [{"id": "milk_2l", "name": "Milk 2L", "quantity": 1}]
-    sensor.add_items_from_receipt(items2)
+    await sensor.async_add_items_from_receipt(items2)
 
     assert sensor._inventory["milk_2l"]["quantity"] == 3
     assert sensor.native_value == 1  # Still one unique item
 
 
-def test_inventory_remove_item(mock_coordinator, mock_entry):
+@pytest.mark.asyncio
+async def test_inventory_remove_item(mock_coordinator, mock_entry):
     """Test removing items from inventory."""
     sensor = TescoInventorySensor(mock_coordinator, mock_entry)
 
     # Add items first
     items = [{"id": "milk_2l", "name": "Milk 2L", "quantity": 3}]
-    sensor.add_items_from_receipt(items)
+    await sensor.async_add_items_from_receipt(items)
 
     # Remove one
-    sensor.remove_item("milk_2l", 1)
+    await sensor.async_remove_item("milk_2l", 1)
     assert sensor._inventory["milk_2l"]["quantity"] == 2
 
     # Remove remaining
-    sensor.remove_item("milk_2l", 2)
+    await sensor.async_remove_item("milk_2l", 2)
     assert "milk_2l" not in sensor._inventory
 
 
-def test_inventory_attributes(mock_coordinator, mock_entry):
+@pytest.mark.asyncio
+async def test_inventory_attributes(mock_coordinator, mock_entry):
     """Test inventory sensor attributes."""
     sensor = TescoInventorySensor(mock_coordinator, mock_entry)
 
     items = [{"id": "milk_2l", "name": "Milk 2L", "quantity": 2}]
-    sensor.add_items_from_receipt(items)
+    await sensor.async_add_items_from_receipt(items)
 
     attrs = sensor.extra_state_attributes
 

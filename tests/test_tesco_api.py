@@ -24,7 +24,6 @@ async def test_api_initialization():
     assert api._session is None
     assert not api._logged_in
     assert api._csrf_token is None
-    assert api._rate_limit_delay == 1.0
 
 
 @pytest.mark.asyncio
@@ -254,7 +253,7 @@ async def test_add_to_basket():
 
         result = await api.async_add_to_basket("12345", 2)
 
-        assert result is True
+        assert result["success"] is True
         mock_session.post.assert_called_once()
 
 
@@ -288,7 +287,7 @@ async def test_rate_limiting():
 
     # First request should not sleep
     await api._rate_limit()
-    assert api._last_request_time is not None
+    assert api._last_request_time_read is not None
 
     # Second immediate request should sleep
     import time

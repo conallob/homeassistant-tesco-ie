@@ -2,6 +2,23 @@
 
 A Home Assistant custom integration for Tesco Ireland that enables smart home automation with your Tesco account.
 
+## ⚠️ LEGAL DISCLAIMER
+
+**USE AT YOUR OWN RISK. This integration uses web scraping to access Tesco Ireland's website, which may violate Tesco's Terms of Service.** Using this integration could result in:
+
+- **Account suspension or termination** by Tesco
+- **IP address blocking** from Tesco's website
+- **Loss of Clubcard benefits** or account privileges
+- **Legal action** if Tesco enforces their Terms of Service
+
+**By using this integration, you acknowledge that:**
+- You have read and understand this disclaimer
+- You accept full responsibility for any consequences
+- The authors and contributors are not liable for any damages or account issues
+- This integration is provided "as is" without any warranty
+
+**This integration is for educational and personal use only. Commercial use is strictly prohibited.**
+
 ## ⚠️ IMPORTANT: Placeholder Implementation Warning
 
 **This integration currently uses placeholder HTML selectors and has NOT been tested against the real Tesco Ireland website.** The web scraping implementation uses generic CSS selectors and regex patterns that may not match the actual Tesco.ie website structure.
