@@ -10,7 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryAuthFailed
-from homeassistant.helpers import config_validation as cv, entity_platform
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
@@ -118,34 +118,30 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             _LOGGER.warning("No items provided in receipt")
             return
 
-        # Get platform to access sensor entities
-        platform = entity_platform.async_get_current_platform()
-        if platform is None:
-            # Fallback: Find inventory sensor in all entries
-            for entry_id, entry_data in hass.data.get(DOMAIN, {}).items():
-                # Store items for the coordinator to handle
-                if "pending_receipt_items" not in entry_data:
-                    entry_data["pending_receipt_items"] = []
-                entry_data["pending_receipt_items"].extend(items)
+        # Get inventory sensor from first entry
+        for entry_id, entry_data in hass.data.get(DOMAIN, {}).items():
+            if isinstance(entry_data, dict) and "inventory_sensor" in entry_data:
+                sensor = entry_data["inventory_sensor"]
+                await sensor.async_add_items_from_receipt(items)
+                _LOGGER.info("Added %d items to inventory", len(items))
+                return
 
-            _LOGGER.info("Queued %d items for inventory ingestion", len(items))
-            return
+        _LOGGER.error("No inventory sensor found")
 
     async def handle_remove_from_inventory(call: ServiceCall) -> None:
         """Handle remove from inventory service."""
         product_id = call.data.get("product_id")
         quantity = call.data.get("quantity", 1)
 
-        # Queue removal for sensor to process
+        # Get inventory sensor from first entry
         for entry_id, entry_data in hass.data.get(DOMAIN, {}).items():
-            if "pending_removals" not in entry_data:
-                entry_data["pending_removals"] = []
-            entry_data["pending_removals"].append({
-                "product_id": product_id,
-                "quantity": quantity,
-            })
+            if isinstance(entry_data, dict) and "inventory_sensor" in entry_data:
+                sensor = entry_data["inventory_sensor"]
+                await sensor.async_remove_item(product_id, quantity)
+                _LOGGER.info("Removed item from inventory")
+                return
 
-        _LOGGER.info("Queued item removal from inventory")
+        _LOGGER.error("No inventory sensor found")
 
     async def handle_search_products(call: ServiceCall) -> None:
         """Handle product search service."""
