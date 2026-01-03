@@ -1,4 +1,5 @@
 """Sensor platform for Tesco Ireland integration."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -106,7 +107,9 @@ class TescoInventorySensor(TescoBaseSensor):
             data = await self._store.async_load()
             if data is not None:
                 self._inventory = data.get("inventory", {})
-                _LOGGER.debug("Loaded %d items from inventory storage", len(self._inventory))
+                _LOGGER.debug(
+                    "Loaded %d items from inventory storage", len(self._inventory)
+                )
         except Exception as err:
             _LOGGER.error("Failed to load inventory: %s", err)
             self._inventory = {}
@@ -114,10 +117,12 @@ class TescoInventorySensor(TescoBaseSensor):
     async def async_save_inventory(self) -> None:
         """Save inventory to persistent storage."""
         try:
-            await self._store.async_save({
-                "inventory": self._inventory,
-                "last_saved": datetime.now().isoformat(),
-            })
+            await self._store.async_save(
+                {
+                    "inventory": self._inventory,
+                    "last_saved": datetime.now().isoformat(),
+                }
+            )
             _LOGGER.debug("Saved inventory to storage")
         except Exception as err:
             _LOGGER.error("Failed to save inventory: %s", err)

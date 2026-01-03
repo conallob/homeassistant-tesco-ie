@@ -1,4 +1,5 @@
 """Constants for the Tesco Ireland integration."""
+
 from datetime import timedelta
 
 DOMAIN = "tesco_ie"

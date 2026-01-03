@@ -1,4 +1,5 @@
 """Tesco Ireland API client with web scraping."""
+
 from __future__ import annotations
 
 import asyncio
@@ -108,7 +109,9 @@ class TescoAPI:
         # Look for CSRF token in script tags
         for script in soup.find_all("script"):
             if script.string:
-                csrf_match = re.search(r'csrfToken["\']?\s*:\s*["\']([^"\']+)', script.string)
+                csrf_match = re.search(
+                    r'csrfToken["\']?\s*:\s*["\']([^"\']+)', script.string
+                )
                 if csrf_match:
                     _LOGGER.debug("Found CSRF token in script")
                     return csrf_match.group(1)
@@ -127,7 +130,9 @@ class TescoAPI:
             # Step 1: Get the login page to obtain CSRF token and cookies
             async with self._session.get(TESCO_LOGIN_URL) as response:
                 if response.status != 200:
-                    raise TescoAuthError(f"Failed to load login page: {response.status}")
+                    raise TescoAuthError(
+                        f"Failed to load login page: {response.status}"
+                    )
 
                 html = await response.text()
                 self._csrf_token = await self._get_csrf_token(html)
@@ -161,21 +166,30 @@ class TescoAPI:
                     html = await response.text()
 
                     # Look for indicators of successful login
-                    if any(indicator in html.lower() for indicator in [
-                        "my account",
-                        "clubcard",
-                        "sign out",
-                        "logout",
-                    ]):
+                    if any(
+                        indicator in html.lower()
+                        for indicator in [
+                            "my account",
+                            "clubcard",
+                            "sign out",
+                            "logout",
+                        ]
+                    ):
                         self._logged_in = True
                         _LOGGER.info("Successfully authenticated")
                         return True
                     else:
                         # Check for error messages
                         soup = BeautifulSoup(html, "lxml")
-                        error_elements = soup.find_all(class_=re.compile(r"error|alert|warning", re.I))
-                        error_msg = " ".join(elem.get_text(strip=True) for elem in error_elements[:3])
-                        raise TescoAuthError(f"Login failed: {error_msg or 'Invalid credentials'}")
+                        error_elements = soup.find_all(
+                            class_=re.compile(r"error|alert|warning", re.I)
+                        )
+                        error_msg = " ".join(
+                            elem.get_text(strip=True) for elem in error_elements[:3]
+                        )
+                        raise TescoAuthError(
+                            f"Login failed: {error_msg or 'Invalid credentials'}"
+                        )
                 else:
                     raise TescoAuthError(f"Login failed with status: {response.status}")
 
@@ -237,8 +251,7 @@ class TescoAPI:
 
         # Search in specific clubcard elements first
         clubcard_elements = soup.find_all(
-            ["div", "span", "p"],
-            class_=re.compile(r"clubcard.*points?", re.I)
+            ["div", "span", "p"], class_=re.compile(r"clubcard.*points?", re.I)
         )
 
         for elem in clubcard_elements:
@@ -274,8 +287,7 @@ class TescoAPI:
 
         # Look for delivery-specific elements with more targeted selectors
         delivery_elements = soup.find_all(
-            ["div", "section"],
-            class_=re.compile(r"delivery|order", re.I)
+            ["div", "section"], class_=re.compile(r"delivery|order", re.I)
         )
 
         for elem in delivery_elements:
@@ -285,7 +297,7 @@ class TescoAPI:
             date_match = re.search(
                 r"(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+(\d{4})",
                 text,
-                re.IGNORECASE
+                re.IGNORECASE,
             )
             if date_match and not delivery_info["next_delivery"]:
                 delivery_info["delivery_slot"] = text
@@ -318,33 +330,39 @@ class TescoAPI:
                     # These may need adjustment based on actual Tesco.ie HTML structure
                     product_containers = soup.find_all(
                         ["article", "div"],
-                        class_=re.compile(r"product-tile|product-card|product-list-item", re.I)
+                        class_=re.compile(
+                            r"product-tile|product-card|product-list-item", re.I
+                        ),
                     )
 
                     for elem in product_containers[:MAX_SEARCH_RESULTS]:
                         try:
                             # Extract product information with specific selectors
                             product_id = (
-                                elem.get("data-product-id") or
-                                elem.get("data-product") or
-                                elem.get("id")
+                                elem.get("data-product-id")
+                                or elem.get("data-product")
+                                or elem.get("id")
                             )
 
                             name_elem = elem.find(
                                 ["h2", "h3", "a"],
-                                class_=re.compile(r"product-title|product-name", re.I)
+                                class_=re.compile(r"product-title|product-name", re.I),
                             )
 
                             price_elem = elem.find(
                                 ["span", "div"],
-                                class_=re.compile(r"price-value|product-price", re.I)
+                                class_=re.compile(r"price-value|product-price", re.I),
                             )
 
                             if name_elem:
                                 product = {
                                     "id": product_id or f"product_{len(products)}",
                                     "name": name_elem.get_text(strip=True),
-                                    "price": price_elem.get_text(strip=True) if price_elem else "N/A",
+                                    "price": (
+                                        price_elem.get_text(strip=True)
+                                        if price_elem
+                                        else "N/A"
+                                    ),
                                 }
                                 products.append(product)
                         except Exception:
@@ -420,25 +438,28 @@ class TescoAPI:
 
                     # Use specific basket item selectors
                     item_elements = soup.find_all(
-                        ["div", "li"],
-                        class_=re.compile(r"basket-item|cart-item", re.I)
+                        ["div", "li"], class_=re.compile(r"basket-item|cart-item", re.I)
                     )
 
                     for elem in item_elements:
                         try:
                             name_elem = elem.find(
                                 ["span", "h3", "a"],
-                                class_=re.compile(r"item-name|product-name", re.I)
+                                class_=re.compile(r"item-name|product-name", re.I),
                             )
                             qty_elem = elem.find(
                                 ["input", "span"],
-                                class_=re.compile(r"quantity|qty", re.I)
+                                class_=re.compile(r"quantity|qty", re.I),
                             )
 
                             if name_elem:
                                 item = {
                                     "name": name_elem.get_text(strip=True),
-                                    "quantity": int(qty_elem.get_text(strip=True)) if qty_elem else 1,
+                                    "quantity": (
+                                        int(qty_elem.get_text(strip=True))
+                                        if qty_elem
+                                        else 1
+                                    ),
                                 }
                                 items.append(item)
                         except Exception:
