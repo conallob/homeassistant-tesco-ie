@@ -29,18 +29,17 @@ async def test_form_shown(hass: HomeAssistant):
 @pytest.mark.asyncio
 async def test_successful_config_entry(hass: HomeAssistant, mock_tesco_api):
     """Test successful creation of config entry."""
-    flow = TescoIEConfigFlow()
-    flow.hass = hass
-
     with patch(
         "custom_components.tesco_ie.config_flow.TescoAPI",
         return_value=mock_tesco_api,
     ):
-        result = await flow.async_step_user(
-            user_input={
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_USER},
+            data={
                 CONF_EMAIL: "test@example.com",
                 CONF_PASSWORD: "password123",
-            }
+            },
         )
 
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
@@ -103,7 +102,6 @@ async def test_unknown_error(hass: HomeAssistant):
 @pytest.mark.asyncio
 async def test_duplicate_entry(hass: HomeAssistant, mock_tesco_api):
     """Test that duplicate entries are prevented."""
-    # Create and add first entry using the proper API
     entry_data = {
         CONF_EMAIL: "test@example.com",
         CONF_PASSWORD: "password123",
@@ -113,15 +111,22 @@ async def test_duplicate_entry(hass: HomeAssistant, mock_tesco_api):
         "custom_components.tesco_ie.config_flow.TescoAPI",
         return_value=mock_tesco_api,
     ):
-        # Setup first entry
-        first_flow = TescoIEConfigFlow()
-        first_flow.hass = hass
-        await first_flow.async_step_user(user_input=entry_data)
+        # Create first entry
+        result1 = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_USER},
+            data=entry_data,
+        )
+
+        # Verify first entry was created
+        assert result1["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
 
         # Try to add duplicate
-        flow = TescoIEConfigFlow()
-        flow.hass = hass
-        result = await flow.async_step_user(user_input=entry_data)
+        result2 = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_USER},
+            data=entry_data,
+        )
 
-    assert result["type"] == data_entry_flow.FlowResultType.ABORT
-    assert result["reason"] == "already_configured"
+        assert result2["type"] == data_entry_flow.FlowResultType.ABORT
+        assert result2["reason"] == "already_configured"

@@ -1,7 +1,7 @@
 """Tests for Tesco Ireland API client."""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
@@ -12,6 +12,22 @@ from custom_components.tesco_ie.tesco_api import (
     TescoAPIError,
     TescoAuthError,
 )
+
+
+class AsyncContextManagerMock:
+    """Helper to create async context manager mocks."""
+
+    def __init__(self, return_value):
+        """Initialize with the value to return from __aenter__."""
+        self.return_value = return_value
+
+    async def __aenter__(self):
+        """Enter the context."""
+        return self.return_value
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Exit the context."""
+        return None
 
 
 @pytest.mark.asyncio
@@ -84,14 +100,14 @@ async def test_successful_login(mock_successful_login_response):
         mock_session_class.return_value = mock_session
 
         # Mock GET request for login page
-        mock_get = AsyncMock()
-        mock_get.__aenter__.return_value = mock_successful_login_response
-        mock_session.get.return_value = mock_get
+        mock_session.get = AsyncMock(
+            return_value=AsyncContextManagerMock(mock_successful_login_response)
+        )
 
         # Mock POST request for login submission
-        mock_post = AsyncMock()
-        mock_post.__aenter__.return_value = mock_successful_login_response
-        mock_session.post.return_value = mock_post
+        mock_session.post = AsyncMock(
+            return_value=AsyncContextManagerMock(mock_successful_login_response)
+        )
 
         result = await api.async_login()
 
@@ -101,7 +117,9 @@ async def test_successful_login(mock_successful_login_response):
 
 
 @pytest.mark.asyncio
-async def test_failed_login(mock_failed_login_response):
+async def test_failed_login(
+    mock_successful_login_response, mock_failed_login_response
+):
     """Test failed login with invalid credentials."""
     api = TescoAPI("test@example.com", "wrong_password")
 
@@ -110,15 +128,15 @@ async def test_failed_login(mock_failed_login_response):
         mock_session.closed = False
         mock_session_class.return_value = mock_session
 
-        # Mock GET request
-        mock_get = AsyncMock()
-        mock_get.__aenter__.return_value = mock_successful_login_response
-        mock_session.get.return_value = mock_get
+        # Mock GET request (successful to get login page)
+        mock_session.get = AsyncMock(
+            return_value=AsyncContextManagerMock(mock_successful_login_response)
+        )
 
         # Mock POST request with failed response
-        mock_post = AsyncMock()
-        mock_post.__aenter__.return_value = mock_failed_login_response
-        mock_session.post.return_value = mock_post
+        mock_session.post = AsyncMock(
+            return_value=AsyncContextManagerMock(mock_failed_login_response)
+        )
 
         with pytest.raises(TescoAuthError):
             await api.async_login()
