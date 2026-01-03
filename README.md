@@ -167,9 +167,56 @@ The `tesco_api.py` module implements web scraping with:
 - **Testing**: The actual URLs and selectors may need adjustment based on real website structure
 - **Receipt Parsing**: Currently requires manual service calls; automatic email parsing not yet implemented
 
+## Testing
+
+This integration includes a comprehensive test suite to ensure reliability and maintainability.
+
+### Running Tests Locally
+
+```bash
+# Install test dependencies
+pip install -r requirements-test.txt
+
+# Run all tests
+pytest
+
+# Run tests with coverage
+pytest --cov=custom_components.tesco_ie --cov-report=html
+
+# Run specific test file
+pytest tests/test_tesco_api.py
+
+# Run tests in verbose mode
+pytest -v
+```
+
+### Test Coverage
+
+The test suite includes:
+
+- **API Client Tests** (18 tests): Session management, authentication, CSRF tokens, data parsing, rate limiting
+- **Config Flow Tests** (5 tests): Configuration UI, validation, error handling
+- **Sensor Tests** (13 tests): All sensor types, inventory management, attributes
+- **Integration Tests** (4 tests): Setup, teardown, coordinator updates
+
+### Continuous Integration
+
+All pull requests automatically run:
+
+- **Unit tests** on Python 3.11 and 3.12
+- **Code quality checks** with ruff, black, isort, and mypy
+- **Integration validation** for manifest and required files
+- **Coverage reporting** via Codecov
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+Before submitting:
+1. Run the test suite: `pytest`
+2. Check code formatting: `black custom_components/`
+3. Run linting: `ruff check custom_components/`
+4. Ensure tests pass in CI
 
 ## License
 
