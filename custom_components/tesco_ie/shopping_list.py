@@ -4,9 +4,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from homeassistant.components.shopping_list import ShoppingListItem
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN

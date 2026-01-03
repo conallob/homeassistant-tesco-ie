@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
-from datetime import datetime, timedelta
+import time
 from typing import Any
 
 import aiohttp
@@ -28,6 +27,10 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
+# Constants
+MAX_SEARCH_RESULTS = 10
+RATE_LIMIT_DELAY = 1.0  # seconds
+
 
 class TescoAuthError(Exception):
     """Exception for authentication errors."""
@@ -48,13 +51,14 @@ class TescoAPI:
         self._cookie_jar: CookieJar | None = None
         self._logged_in = False
         self._csrf_token: str | None = None
-        self._last_request_time: datetime | None = None
-        self._rate_limit_delay = 1.0  # seconds between requests
+        self._last_request_time: float | None = None
+        self._rate_limit_delay = RATE_LIMIT_DELAY
 
     async def _create_session(self) -> None:
         """Create an aiohttp session with proper headers and cookie jar."""
         if self._session is None or self._session.closed:
-            self._cookie_jar = CookieJar(unsafe=True)
+            # Use secure cookie jar (removed unsafe=True)
+            self._cookie_jar = CookieJar()
             timeout = aiohttp.ClientTimeout(total=30)
             self._session = aiohttp.ClientSession(
                 cookie_jar=self._cookie_jar,
@@ -71,25 +75,34 @@ class TescoAPI:
             )
 
     async def _rate_limit(self) -> None:
-        """Implement rate limiting to avoid being blocked."""
+        """Implement rate limiting to avoid being blocked.
+
+        Uses monotonic clock for accurate timing.
+        """
         if self._last_request_time:
-            elapsed = (datetime.now() - self._last_request_time).total_seconds()
+            elapsed = time.monotonic() - self._last_request_time
             if elapsed < self._rate_limit_delay:
                 await asyncio.sleep(self._rate_limit_delay - elapsed)
-        self._last_request_time = datetime.now()
+        self._last_request_time = time.monotonic()
 
     async def _get_csrf_token(self, html: str) -> str | None:
-        """Extract CSRF token from HTML."""
+        """Extract CSRF token from HTML.
+
+        Checks multiple common locations for CSRF tokens.
+        """
         soup = BeautifulSoup(html, "lxml")
 
         # Look for CSRF token in meta tags
         csrf_meta = soup.find("meta", {"name": "csrf-token"})
         if csrf_meta and csrf_meta.get("content"):
-            return csrf_meta["content"]
+            token = csrf_meta["content"]
+            _LOGGER.debug("Found CSRF token in meta tag")
+            return token
 
         # Look for CSRF token in hidden inputs
         csrf_input = soup.find("input", {"name": "_csrf"})
         if csrf_input and csrf_input.get("value"):
+            _LOGGER.debug("Found CSRF token in input field")
             return csrf_input["value"]
 
         # Look for CSRF token in script tags
@@ -97,13 +110,15 @@ class TescoAPI:
             if script.string:
                 csrf_match = re.search(r'csrfToken["\']?\s*:\s*["\']([^"\']+)', script.string)
                 if csrf_match:
+                    _LOGGER.debug("Found CSRF token in script")
                     return csrf_match.group(1)
 
+        _LOGGER.debug("No CSRF token found")
         return None
 
     async def async_login(self) -> bool:
         """Login to Tesco Ireland using web scraping."""
-        _LOGGER.info("Logging in to Tesco Ireland for %s", self.email)
+        _LOGGER.info("Authenticating with Tesco Ireland")
 
         try:
             await self._create_session()
@@ -116,7 +131,6 @@ class TescoAPI:
 
                 html = await response.text()
                 self._csrf_token = await self._get_csrf_token(html)
-                _LOGGER.debug("Obtained CSRF token: %s", self._csrf_token[:10] if self._csrf_token else "None")
 
             await self._rate_limit()
 
@@ -142,7 +156,6 @@ class TescoAPI:
                 allow_redirects=True,
             ) as response:
                 # Check if login was successful
-                # Typically, successful login redirects to account or groceries page
                 if response.status in (200, 302, 303):
                     # Verify we're logged in by checking for account-specific content
                     html = await response.text()
@@ -153,10 +166,9 @@ class TescoAPI:
                         "clubcard",
                         "sign out",
                         "logout",
-                        self.email.lower()
                     ]):
                         self._logged_in = True
-                        _LOGGER.info("Successfully logged in to Tesco Ireland")
+                        _LOGGER.info("Successfully authenticated")
                         return True
                     else:
                         # Check for error messages
@@ -168,10 +180,10 @@ class TescoAPI:
                     raise TescoAuthError(f"Login failed with status: {response.status}")
 
         except aiohttp.ClientError as err:
-            _LOGGER.error("Network error during login: %s", err)
+            _LOGGER.error("Network error during login")
             raise TescoAuthError(f"Network error: {err}") from err
         except Exception as err:
-            _LOGGER.error("Login failed: %s", err)
+            _LOGGER.error("Login failed")
             raise TescoAuthError(f"Failed to authenticate: {err}") from err
 
     async def async_get_data(self) -> dict[str, Any]:
@@ -210,19 +222,36 @@ class TescoAPI:
                     }
 
         except Exception as err:
-            _LOGGER.error("Error fetching Tesco data: %s", err)
+            _LOGGER.error("Error fetching Tesco data")
             raise TescoAPIError(f"Failed to fetch data: {err}") from err
 
     async def _parse_clubcard_points(self, soup: BeautifulSoup) -> int:
         """Parse Clubcard points from account page."""
         # Look for Clubcard points in various possible locations
+        # Use specific selectors for better reliability
         points_patterns = [
             r"(\d+)\s*points?",
             r"clubcard.*?(\d+)",
             r"points.*?(\d+)",
         ]
 
-        # Search in text content
+        # Search in specific clubcard elements first
+        clubcard_elements = soup.find_all(
+            ["div", "span", "p"],
+            class_=re.compile(r"clubcard.*points?", re.I)
+        )
+
+        for elem in clubcard_elements:
+            text = elem.get_text()
+            for pattern in points_patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    try:
+                        return int(match.group(1))
+                    except (ValueError, IndexError):
+                        continue
+
+        # Fallback to broader search
         text = soup.get_text()
         for pattern in points_patterns:
             match = re.search(pattern, text, re.IGNORECASE)
@@ -230,16 +259,6 @@ class TescoAPI:
                 try:
                     return int(match.group(1))
                 except (ValueError, IndexError):
-                    continue
-
-        # Look in specific elements
-        clubcard_elements = soup.find_all(class_=re.compile(r"clubcard|points", re.I))
-        for elem in clubcard_elements:
-            match = re.search(r"(\d+)", elem.get_text())
-            if match:
-                try:
-                    return int(match.group(1))
-                except ValueError:
                     continue
 
         _LOGGER.debug("Could not find Clubcard points")
@@ -253,8 +272,11 @@ class TescoAPI:
             "order_number": None,
         }
 
-        # Look for delivery information in the page
-        delivery_elements = soup.find_all(class_=re.compile(r"delivery|order", re.I))
+        # Look for delivery-specific elements with more targeted selectors
+        delivery_elements = soup.find_all(
+            ["div", "section"],
+            class_=re.compile(r"delivery|order", re.I)
+        )
 
         for elem in delivery_elements:
             text = elem.get_text(strip=True)
@@ -266,7 +288,6 @@ class TescoAPI:
                 re.IGNORECASE
             )
             if date_match and not delivery_info["next_delivery"]:
-                # Parse the date (simplified - would need proper date parsing)
                 delivery_info["delivery_slot"] = text
 
             # Try to extract order number
@@ -293,15 +314,31 @@ class TescoAPI:
 
                     products = []
 
-                    # Find product elements (this selector may need adjustment)
-                    product_elements = soup.find_all(class_=re.compile(r"product|item", re.I))
+                    # Use more specific product selectors
+                    # These may need adjustment based on actual Tesco.ie HTML structure
+                    product_containers = soup.find_all(
+                        ["article", "div"],
+                        class_=re.compile(r"product-tile|product-card|product-list-item", re.I)
+                    )
 
-                    for elem in product_elements[:10]:  # Limit to first 10 results
+                    for elem in product_containers[:MAX_SEARCH_RESULTS]:
                         try:
-                            # Extract product information
-                            product_id = elem.get("data-product-id") or elem.get("id")
-                            name_elem = elem.find(class_=re.compile(r"name|title", re.I))
-                            price_elem = elem.find(class_=re.compile(r"price", re.I))
+                            # Extract product information with specific selectors
+                            product_id = (
+                                elem.get("data-product-id") or
+                                elem.get("data-product") or
+                                elem.get("id")
+                            )
+
+                            name_elem = elem.find(
+                                ["h2", "h3", "a"],
+                                class_=re.compile(r"product-title|product-name", re.I)
+                            )
+
+                            price_elem = elem.find(
+                                ["span", "div"],
+                                class_=re.compile(r"price-value|product-price", re.I)
+                            )
 
                             if name_elem:
                                 product = {
@@ -310,18 +347,19 @@ class TescoAPI:
                                     "price": price_elem.get_text(strip=True) if price_elem else "N/A",
                                 }
                                 products.append(product)
-                        except Exception as e:
-                            _LOGGER.debug("Error parsing product: %s", e)
+                        except Exception:
+                            # Log at debug level to avoid spam
+                            _LOGGER.debug("Error parsing product element")
                             continue
 
-                    _LOGGER.info("Found %d products for query: %s", len(products), query)
+                    _LOGGER.info("Found %d products", len(products))
                     return products
                 else:
                     _LOGGER.warning("Product search failed: %s", response.status)
                     return []
 
-        except Exception as err:
-            _LOGGER.error("Error searching products: %s", err)
+        except Exception:
+            _LOGGER.error("Error searching products")
             return []
 
     async def async_add_to_basket(self, product_id: str, quantity: int = 1) -> bool:
@@ -355,14 +393,14 @@ class TescoAPI:
                 headers=headers,
             ) as response:
                 if response.status in (200, 201):
-                    _LOGGER.info("Added product %s (qty: %d) to basket", product_id, quantity)
+                    _LOGGER.info("Added item to basket")
                     return True
                 else:
                     _LOGGER.warning("Failed to add to basket: %s", response.status)
                     return False
 
-        except Exception as err:
-            _LOGGER.error("Error adding to basket: %s", err)
+        except Exception:
+            _LOGGER.error("Error adding to basket")
             return False
 
     async def async_get_basket(self) -> list[dict[str, Any]]:
@@ -380,13 +418,22 @@ class TescoAPI:
 
                     items = []
 
-                    # Find basket item elements
-                    item_elements = soup.find_all(class_=re.compile(r"basket.*item", re.I))
+                    # Use specific basket item selectors
+                    item_elements = soup.find_all(
+                        ["div", "li"],
+                        class_=re.compile(r"basket-item|cart-item", re.I)
+                    )
 
                     for elem in item_elements:
                         try:
-                            name_elem = elem.find(class_=re.compile(r"name|title", re.I))
-                            qty_elem = elem.find(class_=re.compile(r"quantity|qty", re.I))
+                            name_elem = elem.find(
+                                ["span", "h3", "a"],
+                                class_=re.compile(r"item-name|product-name", re.I)
+                            )
+                            qty_elem = elem.find(
+                                ["input", "span"],
+                                class_=re.compile(r"quantity|qty", re.I)
+                            )
 
                             if name_elem:
                                 item = {
@@ -394,8 +441,8 @@ class TescoAPI:
                                     "quantity": int(qty_elem.get_text(strip=True)) if qty_elem else 1,
                                 }
                                 items.append(item)
-                        except Exception as e:
-                            _LOGGER.debug("Error parsing basket item: %s", e)
+                        except Exception:
+                            _LOGGER.debug("Error parsing basket item")
                             continue
 
                     return items
@@ -403,14 +450,16 @@ class TescoAPI:
                     _LOGGER.warning("Failed to fetch basket: %s", response.status)
                     return []
 
-        except Exception as err:
-            _LOGGER.error("Error fetching basket: %s", err)
+        except Exception:
+            _LOGGER.error("Error fetching basket")
             return []
 
     async def async_close(self) -> None:
-        """Close the API session."""
+        """Close the API session and cleanup resources."""
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
         self._logged_in = False
         self._csrf_token = None
+        self._cookie_jar = None
+        _LOGGER.debug("API session closed")

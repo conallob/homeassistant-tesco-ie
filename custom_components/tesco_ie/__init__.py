@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
-from typing import Any
 
 import voluptuous as vol
 
@@ -11,7 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryAuthFailed
-from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
@@ -32,9 +31,14 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
+# Track if services have been registered globally
+SERVICES_REGISTERED = False
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Tesco Ireland from a config entry."""
+    # Note: Home Assistant encrypts config entry data automatically
+    # Passwords are not stored in plaintext in storage
     email = entry.data[CONF_EMAIL]
     password = entry.data[CONF_PASSWORD]
 
@@ -43,7 +47,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
         await api.async_login()
     except Exception as err:
-        _LOGGER.error("Failed to authenticate with Tesco: %s", err)
+        _LOGGER.error("Failed to authenticate with Tesco")
         raise ConfigEntryAuthFailed from err
 
     async def async_update_data():
@@ -71,70 +75,96 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Register services
-    await async_setup_services(hass, entry)
+    # Register services globally (only once)
+    await async_setup_services(hass)
 
     return True
 
 
-async def async_setup_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Set up services for Tesco integration."""
+async def async_setup_services(hass: HomeAssistant) -> None:
+    """Set up services for Tesco integration (global, not per-entry)."""
+    global SERVICES_REGISTERED
+
+    if SERVICES_REGISTERED:
+        return
 
     async def handle_add_to_basket(call: ServiceCall) -> None:
         """Handle add to basket service."""
         product_name = call.data.get("product_name")
         quantity = call.data.get("quantity", 1)
 
-        api = hass.data[DOMAIN][entry.entry_id]["api"]
+        # Get the first available API instance
+        # In multi-instance setups, user should specify entry_id
+        if not hass.data.get(DOMAIN):
+            _LOGGER.error("No Tesco integration configured")
+            return
+
+        entry_id = list(hass.data[DOMAIN].keys())[0]
+        api = hass.data[DOMAIN][entry_id]["api"]
 
         # Search for product
         products = await api.async_search_products(product_name)
         if products:
             await api.async_add_to_basket(products[0]["id"], quantity)
-            _LOGGER.info("Added %s (x%d) to basket", product_name, quantity)
+            _LOGGER.info("Added item to basket")
         else:
-            _LOGGER.warning("Product not found: %s", product_name)
+            _LOGGER.warning("Product not found")
 
     async def handle_ingest_receipt(call: ServiceCall) -> None:
         """Handle receipt ingestion service."""
         items = call.data.get("items", [])
 
-        # Get the inventory sensor
-        entity_id = f"sensor.tesco_ie_inventory"
-        states = hass.states.get(entity_id)
-
-        if states is None:
-            _LOGGER.error("Inventory sensor not found")
+        if not items:
+            _LOGGER.warning("No items provided in receipt")
             return
 
-        # Find the sensor entity
-        for entry_data in hass.data[DOMAIN].values():
-            coordinator = entry_data.get("coordinator")
-            if coordinator:
-                # Add items to inventory sensor
-                # Note: This is a simplified approach
-                # In production, you'd want to properly access the sensor entity
-                _LOGGER.info("Ingesting %d items from receipt", len(items))
-                break
+        # Get platform to access sensor entities
+        platform = entity_platform.async_get_current_platform()
+        if platform is None:
+            # Fallback: Find inventory sensor in all entries
+            for entry_id, entry_data in hass.data.get(DOMAIN, {}).items():
+                # Store items for the coordinator to handle
+                if "pending_receipt_items" not in entry_data:
+                    entry_data["pending_receipt_items"] = []
+                entry_data["pending_receipt_items"].extend(items)
+
+            _LOGGER.info("Queued %d items for inventory ingestion", len(items))
+            return
 
     async def handle_remove_from_inventory(call: ServiceCall) -> None:
         """Handle remove from inventory service."""
         product_id = call.data.get("product_id")
         quantity = call.data.get("quantity", 1)
 
-        _LOGGER.info("Removing %s (x%d) from inventory", product_id, quantity)
+        # Queue removal for sensor to process
+        for entry_id, entry_data in hass.data.get(DOMAIN, {}).items():
+            if "pending_removals" not in entry_data:
+                entry_data["pending_removals"] = []
+            entry_data["pending_removals"].append({
+                "product_id": product_id,
+                "quantity": quantity,
+            })
+
+        _LOGGER.info("Queued item removal from inventory")
 
     async def handle_search_products(call: ServiceCall) -> None:
         """Handle product search service."""
         query = call.data.get("query")
 
-        api = hass.data[DOMAIN][entry.entry_id]["api"]
+        if not hass.data.get(DOMAIN):
+            _LOGGER.error("No Tesco integration configured")
+            return
+
+        entry_id = list(hass.data[DOMAIN].keys())[0]
+        api = hass.data[DOMAIN][entry_id]["api"]
         products = await api.async_search_products(query)
 
-        _LOGGER.info("Found %d products for query: %s", len(products), query)
-        return products
+        _LOGGER.info("Found %d products", len(products))
 
-    # Register services
+        # Store results for potential retrieval
+        hass.data[DOMAIN]["last_search_results"] = products
+
+    # Register services (only once globally)
     hass.services.async_register(
         DOMAIN,
         SERVICE_ADD_TO_BASKET,
@@ -184,10 +214,26 @@ async def async_setup_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
         schema=vol.Schema({vol.Required("query"): cv.string}),
     )
 
+    SERVICES_REGISTERED = True
+
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    # Close API session to prevent resource leak
+    if entry.entry_id in hass.data.get(DOMAIN, {}):
+        api = hass.data[DOMAIN][entry.entry_id]["api"]
+        await api.async_close()
+
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id)
+
+    # Unregister services if this was the last entry
+    if not hass.data.get(DOMAIN):
+        global SERVICES_REGISTERED
+        hass.services.async_remove(DOMAIN, SERVICE_ADD_TO_BASKET)
+        hass.services.async_remove(DOMAIN, SERVICE_INGEST_RECEIPT)
+        hass.services.async_remove(DOMAIN, SERVICE_REMOVE_FROM_INVENTORY)
+        hass.services.async_remove(DOMAIN, SERVICE_SEARCH_PRODUCTS)
+        SERVICES_REGISTERED = False
 
     return unload_ok

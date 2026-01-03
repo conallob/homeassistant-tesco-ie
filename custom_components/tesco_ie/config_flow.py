@@ -9,7 +9,6 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.data_entry_flow import FlowResult
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import DOMAIN
 from .tesco_api import TescoAPI, TescoAuthError
@@ -39,8 +38,8 @@ class TescoIEConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             email = user_input[CONF_EMAIL]
             password = user_input[CONF_PASSWORD]
 
+            api = TescoAPI(email, password)
             try:
-                api = TescoAPI(email, password)
                 await api.async_login()
             except TescoAuthError:
                 errors["base"] = "invalid_auth"
@@ -55,6 +54,9 @@ class TescoIEConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     title=f"Tesco IE ({email})",
                     data=user_input,
                 )
+            finally:
+                # Always close the session after validation
+                await api.async_close()
 
         return self.async_show_form(
             step_id="user",
