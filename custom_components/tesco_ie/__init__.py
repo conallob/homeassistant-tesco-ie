@@ -16,6 +16,14 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .const import (
     CONF_EMAIL,
     CONF_PASSWORD,
+    CONF_RATE_LIMIT_READ,
+    CONF_RATE_LIMIT_WRITE,
+    CONF_TIMEOUT,
+    CONF_UPDATE_INTERVAL,
+    DEFAULT_RATE_LIMIT_READ,
+    DEFAULT_RATE_LIMIT_WRITE,
+    DEFAULT_TIMEOUT,
+    DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
     SERVICE_ADD_TO_BASKET,
     SERVICE_INGEST_RECEIPT,
@@ -39,7 +47,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     email = entry.data[CONF_EMAIL]
     password = entry.data[CONF_PASSWORD]
 
-    api = TescoAPI(email, password)
+    # Get configuration options with defaults
+    timeout = entry.options.get(CONF_TIMEOUT, DEFAULT_TIMEOUT)
+    update_interval = entry.options.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
+
+    _LOGGER.debug(
+        "Setting up Tesco integration with timeout=%ds, update_interval=%ds",
+        timeout,
+        update_interval,
+    )
+
+    api = TescoAPI(email, password, timeout=timeout)
+
+    # Apply rate limits from options if available
+    rate_limit_read = entry.options.get(CONF_RATE_LIMIT_READ, DEFAULT_RATE_LIMIT_READ)
+    rate_limit_write = entry.options.get(
+        CONF_RATE_LIMIT_WRITE, DEFAULT_RATE_LIMIT_WRITE
+    )
+
+    # Override rate limits in API instance (update tesco_api.py constants)
+    from . import tesco_api
+
+    tesco_api.RATE_LIMIT_DELAY_READ = rate_limit_read
+    tesco_api.RATE_LIMIT_DELAY_WRITE = rate_limit_write
+
+    _LOGGER.debug(
+        "Applied rate limits: read=%ss, write=%ss", rate_limit_read, rate_limit_write
+    )
 
     try:
         await api.async_login()
@@ -72,8 +106,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER,
         name=DOMAIN,
         update_method=async_update_data,
-        update_interval=timedelta(minutes=30),
+        update_interval=timedelta(seconds=update_interval),
     )
+
+    _LOGGER.debug("Coordinator created with %ds update interval", update_interval)
 
     await coordinator.async_config_entry_first_refresh()
 
@@ -88,7 +124,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register services globally (only once)
     await async_setup_services(hass)
 
+    # Listen for options updates
+    entry.async_on_unload(entry.add_update_listener(async_update_options))
+
+    _LOGGER.info("Tesco Ireland integration setup complete for %s", email)
+
     return True
+
+
+async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Update options."""
+    _LOGGER.info("Reloading Tesco Ireland integration due to options change")
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_setup_services(hass: HomeAssistant) -> None:

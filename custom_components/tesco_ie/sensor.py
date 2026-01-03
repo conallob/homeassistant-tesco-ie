@@ -41,6 +41,7 @@ async def async_setup_entry(
         TescoClubcardSensor(coordinator, entry),
         inventory_sensor,
         TescoNextDeliverySensor(coordinator, entry),
+        TescoDiagnosticSensor(coordinator, entry),
     ]
 
     async_add_entities(sensors)
@@ -336,3 +337,60 @@ class TescoNextDeliverySensor(TescoBaseSensor):
                 "order_number": self.coordinator.data.get("order_number"),
             }
         return {}
+
+
+class TescoDiagnosticSensor(TescoBaseSensor):
+    """Diagnostic sensor for monitoring integration health."""
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        """Initialize the diagnostic sensor."""
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_diagnostic"
+        self._attr_name = "Integration Health"
+        self._attr_icon = "mdi:heart-pulse"
+        self._attr_entity_category = "diagnostic"
+
+    @property
+    def native_value(self) -> str:
+        """Return the health status."""
+        if not self.coordinator.last_update_success:
+            return "error"
+        if self.coordinator.data:
+            return "healthy"
+        return "unknown"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return diagnostic attributes."""
+        attrs = {
+            "last_update_success": self.coordinator.last_update_success,
+            "last_update_time": (
+                self.coordinator.last_update_success_time.isoformat()
+                if self.coordinator.last_update_success_time
+                else None
+            ),
+        }
+
+        if self.coordinator.data:
+            # Track if selectors are finding data
+            attrs["clubcard_points_found"] = (
+                self.coordinator.data.get("clubcard_points", 0) > 0
+            )
+            attrs["basket_items_found"] = (
+                len(self.coordinator.data.get("basket_items", [])) > 0
+            )
+            attrs["delivery_info_found"] = (
+                self.coordinator.data.get("next_delivery") is not None
+            )
+
+        # Get API session info from hass.data
+        entry_data = self.hass.data.get("tesco_ie", {}).get(self._entry.entry_id, {})
+        if "api" in entry_data:
+            api = entry_data["api"]
+            attrs["session_active"] = api._logged_in
+            attrs["has_csrf_token"] = api._csrf_token is not None
+
+        if self.coordinator.last_exception:
+            attrs["last_error"] = str(self.coordinator.last_exception)
+
+        return attrs

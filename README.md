@@ -152,6 +152,180 @@ automation:
           product_name: "{{ trigger.event.data.item }}"
 ```
 
+## Configuration
+
+After installation, you can configure the integration behavior through the Home Assistant UI:
+
+1. Go to **Settings** > **Devices & Services**
+2. Find **Tesco Ireland** in the list
+3. Click **Configure** (or the three dots menu → **Options**)
+4. Adjust settings:
+   - **Update Interval**: How often to fetch data (60-3600 seconds, default: 300)
+   - **Timeout**: Request timeout (10-120 seconds, default: 30)
+   - **Read Rate Limit**: Delay between read operations (0.5-10 seconds, default: 1.0)
+   - **Write Rate Limit**: Delay between write operations (1.0-10 seconds, default: 2.0)
+
+## Troubleshooting
+
+### Integration Health Monitoring
+
+The integration includes a diagnostic sensor (`sensor.tesco_ie_integration_health`) that monitors:
+
+- **Session Status**: Whether the API session is active
+- **Selector Success**: Whether data selectors are finding elements
+- **Last Update**: Timestamp and success status of the last update
+- **CSRF Token**: Whether authentication tokens are present
+
+Check this sensor's attributes for diagnostic information when troubleshooting.
+
+### Common Issues
+
+#### Authentication Failures
+
+**Symptom**: Integration shows "Authentication Failed" error
+
+**Solutions**:
+1. Verify your Tesco.ie credentials are correct
+2. Check if Tesco.ie login page structure has changed
+3. Enable debug logging to see detailed authentication flow
+4. Check `sensor.tesco_ie_integration_health` attributes for session status
+
+#### No Data Retrieved
+
+**Symptom**: Sensors show 0 or no data
+
+**Solutions**:
+1. Check the diagnostic sensor attributes for selector success rates
+2. Enable debug logging to see which selectors are failing
+3. Inspect Tesco.ie HTML structure (see guide below)
+4. Update selectors in `tesco_api.py` to match actual page structure
+
+#### Rate Limiting / Blocked Requests
+
+**Symptom**: HTTP 429 errors or integration stops working
+
+**Solutions**:
+1. Increase rate limit delays in configuration
+2. Reduce update interval to fewer requests
+3. Wait 24 hours before retrying (Tesco may have temporarily blocked your IP)
+4. Consider using a VPN to change IP address
+
+#### Integration Becomes Unresponsive
+
+**Symptom**: Integration stops updating or becomes slow
+
+**Solutions**:
+1. Restart Home Assistant
+2. Check Home Assistant logs for errors
+3. Increase timeout setting if network is slow
+4. Verify Tesco.ie website is accessible from your network
+
+### Debugging
+
+Enable debug logging to see detailed information:
+
+```yaml
+logger:
+  default: info
+  logs:
+    custom_components.tesco_ie: debug
+    custom_components.tesco_ie.tesco_api: debug
+```
+
+This will log:
+- Session creation and closure
+- Login indicators found
+- Selector match counts
+- Rate limiting timing
+- API responses
+
+## Inspecting Tesco.ie HTML Structure
+
+To update selectors for real Tesco.ie pages:
+
+### Using Browser Developer Tools
+
+1. **Open Tesco.ie** in your browser
+2. **Log in** to your account
+3. **Open Developer Tools** (F12 or right-click → Inspect)
+4. **Navigate** to the page you want to inspect (account, basket, etc.)
+
+### Finding Clubcard Points
+
+1. Go to your account page
+2. In Developer Tools, press Ctrl+F (search)
+3. Search for your Clubcard points number
+4. Identify the HTML element containing the points
+5. Note the class names or IDs used
+6. Update the selector in `_parse_clubcard_points()` method
+
+Example:
+```python
+clubcard_elements = soup.find_all(
+    ["div", "span", "p"],
+    class_=re.compile(r"actual-class-name", re.I)
+)
+```
+
+### Finding Product Listings
+
+1. Search for a product on Tesco.ie
+2. Inspect a product tile/card in the search results
+3. Note the container class (e.g., `product-tile`, `product-card`)
+4. Update in `async_search_products()` method
+
+### Finding Basket Items
+
+1. Add items to your basket
+2. Go to basket page
+3. Inspect a basket item
+4. Note the item container class
+5. Update in `async_get_basket()` method
+
+### Network Tab Analysis
+
+Use the **Network** tab in Developer Tools to:
+- See CSRF token locations in form submissions
+- Identify API endpoints Tesco uses
+- Understand request/response formats
+- Find authentication cookies
+
+## FAQ
+
+### Is this safe to use with my Tesco account?
+
+This integration uses your Tesco.ie credentials the same way a web browser would. Passwords are encrypted by Home Assistant's storage system. However, web scraping against Tesco's Terms of Service may risk account restrictions.
+
+### Why web scraping instead of an official API?
+
+Tesco Ireland does not provide a public API for customer accounts. Web scraping is the only method to access your account data programmatically.
+
+### Will this work if Tesco updates their website?
+
+No - the integration uses HTML selectors that target specific website elements. When Tesco updates their site structure, you'll need to update the selectors in `tesco_api.py`.
+
+### Can I use multiple Tesco accounts?
+
+Yes! The integration supports multiple config entries. Each account will have its own set of sensors and can be selected in services using the `entry_id` parameter.
+
+### How does inventory tracking work?
+
+The integration tracks items by delivery batch using FIFO (First In, First Out). When you ingest a receipt, items are added with a batch ID and timestamp. When you remove items (consumption), the oldest batches are used first.
+
+### Can I track delivery batches?
+
+Yes! The inventory sensor stores delivery metadata including:
+- Batch ID (unique per delivery)
+- Delivery timestamp
+- Order number (if provided)
+- Quantity per batch
+
+Access this via the sensor's `items` attribute in Home Assistant.
+
+### Does this support Tesco Ireland or Tesco UK?
+
+This integration is specifically for **Tesco Ireland** (tesco.ie). Tesco UK (tesco.com) has a different website structure and would require separate selectors.
+
 ## Development Status
 
 This integration uses web scraping to interact with Tesco Ireland's website. The implementation includes:

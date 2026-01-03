@@ -136,6 +136,7 @@ class TescoAPI:
     async def _create_session(self) -> None:
         """Create an aiohttp session with proper headers and cookie jar."""
         if self._session is None or self._session.closed:
+            _LOGGER.debug("Creating new aiohttp session with timeout=%ds", self.timeout)
             # Use secure cookie jar (removed unsafe=True)
             self._cookie_jar = CookieJar()
             timeout = aiohttp.ClientTimeout(total=self.timeout)
@@ -152,6 +153,9 @@ class TescoAPI:
                     "Upgrade-Insecure-Requests": "1",
                 },
             )
+            _LOGGER.debug("Session created successfully")
+        else:
+            _LOGGER.debug("Reusing existing session")
 
     async def _rate_limit(self, is_write: bool = False) -> None:
         """Implement rate limiting to avoid being blocked.
@@ -293,12 +297,19 @@ class TescoAPI:
                     html = await response.text()
 
                     # Look for indicators of successful login
-                    if any(
-                        indicator in html.lower()
+                    found_indicators = [
+                        indicator
                         for indicator in LOGIN_SUCCESS_INDICATORS
-                    ):
+                        if indicator in html.lower()
+                    ]
+
+                    if found_indicators:
                         self._logged_in = True
                         _LOGGER.info("Successfully authenticated")
+                        _LOGGER.debug(
+                            "Login verified by indicators: %s",
+                            ", ".join(found_indicators),
+                        )
                         return True
                     else:
                         # Check for error messages
@@ -659,9 +670,16 @@ class TescoAPI:
     async def async_close(self) -> None:
         """Close the API session and cleanup resources."""
         if self._session and not self._session.closed:
+            _LOGGER.debug("Closing aiohttp session")
             await self._session.close()
             self._session = None
+
+        was_logged_in = self._logged_in
         self._logged_in = False
         self._csrf_token = None
         self._cookie_jar = None
-        _LOGGER.debug("API session closed")
+
+        if was_logged_in:
+            _LOGGER.debug("API session closed (was logged in)")
+        else:
+            _LOGGER.debug("API session closed (was not logged in)")
