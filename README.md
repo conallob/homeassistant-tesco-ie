@@ -2,6 +2,19 @@
 
 A Home Assistant custom integration for Tesco Ireland that enables smart home automation with your Tesco account.
 
+## ⚠️ IMPORTANT: Placeholder Implementation Warning
+
+**This integration currently uses placeholder HTML selectors and has NOT been tested against the real Tesco Ireland website.** The web scraping implementation uses generic CSS selectors and regex patterns that may not match the actual Tesco.ie website structure.
+
+**Before using this integration in production:**
+1. Test all functionality against the real Tesco.ie website
+2. Update HTML selectors in `tesco_api.py` to match actual page structure
+3. Verify authentication flow and CSRF token extraction
+4. Validate product search, basket operations, and data parsing
+5. Test rate limiting to avoid being blocked by anti-bot protection
+
+**The current implementation is a framework that requires real-world testing and selector updates.**
+
 ## Features
 
 - **Shopping Basket Management**: Add items to your Tesco shopping basket directly from Home Assistant
@@ -160,12 +173,21 @@ The `tesco_api.py` module implements web scraping with:
 
 ### Important Notes
 
+- **⚠️ PLACEHOLDER SELECTORS**: All HTML selectors in `tesco_api.py` are placeholders (`.selector-*`, `#element-*`). These MUST be replaced with actual Tesco.ie selectors before the integration will work.
+- **⚠️ UNTESTED**: This integration has not been tested against the real Tesco Ireland website. All functionality needs real-world validation.
 - **Site Changes**: Tesco may update their website structure, requiring selector updates
 - **Anti-Bot Protection**: Tesco uses bot detection; excessive requests may be blocked
 - **Rate Limiting**: The integration implements 1-second delays between requests
 - **Login Required**: All features require valid Tesco Ireland credentials
-- **Testing**: The actual URLs and selectors may need adjustment based on real website structure
 - **Receipt Parsing**: Currently requires manual service calls; automatic email parsing not yet implemented
+
+### Known Limitations
+
+- Authentication flow may differ from the implemented placeholder
+- Product search selectors are generic and need real page analysis
+- Basket management endpoints are assumed and not verified
+- Clubcard points and delivery information selectors are placeholders
+- CSRF token extraction logic may need adjustment for actual site
 
 ## Testing
 

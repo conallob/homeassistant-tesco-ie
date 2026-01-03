@@ -6,7 +6,11 @@ from datetime import datetime
 import logging
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity, SensorStateClass
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -194,7 +198,7 @@ class TescoNextDeliverySensor(TescoBaseSensor):
         self._attr_unique_id = f"{entry.entry_id}_next_delivery"
         self._attr_name = "Next Delivery"
         self._attr_icon = "mdi:truck-delivery"
-        self._attr_device_class = "timestamp"
+        self._attr_device_class = SensorDeviceClass.TIMESTAMP
 
     @property
     def native_value(self) -> datetime | None:
