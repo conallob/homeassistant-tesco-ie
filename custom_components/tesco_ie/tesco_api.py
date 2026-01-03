@@ -6,13 +6,56 @@ import asyncio
 import logging
 import re
 import time
-from typing import Any
+from typing import Any, TypedDict
 
 import aiohttp
 from aiohttp import CookieJar
 from bs4 import BeautifulSoup
 
 _LOGGER = logging.getLogger(__name__)
+
+
+# TypedDict definitions for structured returns
+class ProductDict(TypedDict):
+    """Product information structure."""
+
+    id: str
+    name: str
+    price: str
+
+
+class DeliveryInfoDict(TypedDict):
+    """Delivery information structure."""
+
+    next_delivery: str | None
+    delivery_slot: str | None
+    order_number: str | None
+
+
+class BasketItemDict(TypedDict):
+    """Basket item structure."""
+
+    name: str
+    quantity: int
+
+
+class TescoDataDict(TypedDict):
+    """Complete Tesco data structure."""
+
+    clubcard_points: int
+    next_delivery: str | None
+    delivery_slot: str | None
+    order_number: str | None
+    basket_items: list[BasketItemDict]
+
+
+class BasketOperationResult(TypedDict):
+    """Result of basket operation."""
+
+    success: bool
+    message: str
+    response_data: dict[str, Any] | None
+
 
 # Tesco Ireland URLs
 TESCO_BASE_URL = "https://www.tesco.ie"
@@ -30,7 +73,20 @@ USER_AGENT = (
 
 # Constants
 MAX_SEARCH_RESULTS = 10
-RATE_LIMIT_DELAY = 1.0  # seconds
+RATE_LIMIT_DELAY_READ = 1.0  # seconds for read operations
+RATE_LIMIT_DELAY_WRITE = 2.0  # seconds for write operations (more conservative)
+DEFAULT_TIMEOUT = 30  # seconds
+
+# Login success indicators
+LOGIN_SUCCESS_INDICATORS = ["my account", "clubcard", "sign out", "logout"]
+
+# Selector validation error messages
+SELECTOR_ERROR_MESSAGES = {
+    "clubcard_points": "Unable to find Clubcard points on page. Website structure may have changed.",
+    "delivery_info": "Unable to find delivery information. Website structure may have changed.",
+    "product_search": "Unable to find product listings. Website structure may have changed.",
+    "basket_items": "Unable to parse basket items. Website structure may have changed.",
+}
 
 
 class TescoAuthError(Exception):
@@ -41,26 +97,48 @@ class TescoAPIError(Exception):
     """Exception for API errors."""
 
 
+class SelectorValidationError(TescoAPIError):
+    """Exception for selector validation failures."""
+
+    def __init__(self, selector_type: str, details: str = "") -> None:
+        """Initialize with selector type and optional details."""
+        base_message = SELECTOR_ERROR_MESSAGES.get(
+            selector_type, "Selector validation failed"
+        )
+        full_message = f"{base_message} {details}".strip()
+        super().__init__(full_message)
+        self.selector_type = selector_type
+
+
 class TescoAPI:
     """Tesco Ireland API client using web scraping."""
 
-    def __init__(self, email: str, password: str) -> None:
-        """Initialize the API client."""
+    def __init__(
+        self, email: str, password: str, timeout: int = DEFAULT_TIMEOUT
+    ) -> None:
+        """Initialize the API client.
+
+        Args:
+            email: Tesco account email
+            password: Tesco account password
+            timeout: Request timeout in seconds (default: 30)
+        """
         self.email = email
         self.password = password
+        self.timeout = timeout
         self._session: aiohttp.ClientSession | None = None
         self._cookie_jar: CookieJar | None = None
         self._logged_in = False
         self._csrf_token: str | None = None
-        self._last_request_time: float | None = None
-        self._rate_limit_delay = RATE_LIMIT_DELAY
+        self._last_request_time_read: float | None = None
+        self._last_request_time_write: float | None = None
 
     async def _create_session(self) -> None:
         """Create an aiohttp session with proper headers and cookie jar."""
         if self._session is None or self._session.closed:
             # Use secure cookie jar (removed unsafe=True)
             self._cookie_jar = CookieJar()
-            timeout = aiohttp.ClientTimeout(total=30)
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
             self._session = aiohttp.ClientSession(
                 cookie_jar=self._cookie_jar,
                 timeout=timeout,
@@ -75,16 +153,30 @@ class TescoAPI:
                 },
             )
 
-    async def _rate_limit(self) -> None:
+    async def _rate_limit(self, is_write: bool = False) -> None:
         """Implement rate limiting to avoid being blocked.
 
         Uses monotonic clock for accurate timing.
+        Separate rate limits for read vs write operations.
+
+        Args:
+            is_write: If True, use write operation rate limit (more conservative)
         """
-        if self._last_request_time:
-            elapsed = time.monotonic() - self._last_request_time
-            if elapsed < self._rate_limit_delay:
-                await asyncio.sleep(self._rate_limit_delay - elapsed)
-        self._last_request_time = time.monotonic()
+        delay = RATE_LIMIT_DELAY_WRITE if is_write else RATE_LIMIT_DELAY_READ
+        last_request_time = (
+            self._last_request_time_write if is_write else self._last_request_time_read
+        )
+
+        if last_request_time:
+            elapsed = time.monotonic() - last_request_time
+            if elapsed < delay:
+                await asyncio.sleep(delay - elapsed)
+
+        current_time = time.monotonic()
+        if is_write:
+            self._last_request_time_write = current_time
+        else:
+            self._last_request_time_read = current_time
 
     async def _get_csrf_token(self, html: str) -> str | None:
         """Extract CSRF token from HTML.
@@ -118,6 +210,41 @@ class TescoAPI:
 
         _LOGGER.debug("No CSRF token found")
         return None
+
+    def _validate_selector_results(
+        self, found_elements: int, selector_type: str, warn_only: bool = True
+    ) -> bool:
+        """Validate that selectors found expected elements.
+
+        Args:
+            found_elements: Number of elements found by selector
+            selector_type: Type of selector for error message lookup
+            warn_only: If True, only log warning; if False, raise exception
+
+        Returns:
+            True if validation passed, False otherwise
+
+        Raises:
+            SelectorValidationError: If warn_only=False and validation fails
+        """
+        if found_elements == 0:
+            error_msg = SELECTOR_ERROR_MESSAGES.get(
+                selector_type, f"No elements found for {selector_type}"
+            )
+            if warn_only:
+                _LOGGER.warning("%s Found %d elements.", error_msg, found_elements)
+                return False
+            else:
+                raise SelectorValidationError(
+                    selector_type, f"Found {found_elements} elements"
+                )
+
+        _LOGGER.debug(
+            "Selector validation passed for %s: found %d elements",
+            selector_type,
+            found_elements,
+        )
+        return True
 
     async def async_login(self) -> bool:
         """Login to Tesco Ireland using web scraping."""
@@ -168,12 +295,7 @@ class TescoAPI:
                     # Look for indicators of successful login
                     if any(
                         indicator in html.lower()
-                        for indicator in [
-                            "my account",
-                            "clubcard",
-                            "sign out",
-                            "logout",
-                        ]
+                        for indicator in LOGIN_SUCCESS_INDICATORS
                     ):
                         self._logged_in = True
                         _LOGGER.info("Successfully authenticated")
@@ -200,7 +322,7 @@ class TescoAPI:
             _LOGGER.error("Login failed")
             raise TescoAuthError(f"Failed to authenticate: {err}") from err
 
-    async def async_get_data(self) -> dict[str, Any]:
+    async def async_get_data(self) -> TescoDataDict:
         """Fetch data from Tesco including Clubcard points and delivery info."""
         if not self._logged_in:
             await self.async_login()
@@ -254,6 +376,11 @@ class TescoAPI:
             ["div", "span", "p"], class_=re.compile(r"clubcard.*points?", re.I)
         )
 
+        # Validate selector found elements
+        self._validate_selector_results(
+            len(clubcard_elements), "clubcard_points", warn_only=True
+        )
+
         for elem in clubcard_elements:
             text = elem.get_text()
             for pattern in points_patterns:
@@ -277,7 +404,7 @@ class TescoAPI:
         _LOGGER.debug("Could not find Clubcard points")
         return 0
 
-    async def _parse_delivery_info(self, soup: BeautifulSoup) -> dict[str, Any]:
+    async def _parse_delivery_info(self, soup: BeautifulSoup) -> DeliveryInfoDict:
         """Parse delivery information from account page."""
         delivery_info = {
             "next_delivery": None,
@@ -309,7 +436,7 @@ class TescoAPI:
 
         return delivery_info
 
-    async def async_search_products(self, query: str) -> list[dict[str, Any]]:
+    async def async_search_products(self, query: str) -> list[ProductDict]:
         """Search for products on Tesco."""
         if not self._logged_in:
             await self.async_login()
@@ -333,6 +460,11 @@ class TescoAPI:
                         class_=re.compile(
                             r"product-tile|product-card|product-list-item", re.I
                         ),
+                    )
+
+                    # Validate selector results
+                    self._validate_selector_results(
+                        len(product_containers), "product_search", warn_only=True
                     )
 
                     for elem in product_containers[:MAX_SEARCH_RESULTS]:
@@ -380,13 +512,23 @@ class TescoAPI:
             _LOGGER.error("Error searching products")
             return []
 
-    async def async_add_to_basket(self, product_id: str, quantity: int = 1) -> bool:
-        """Add item to shopping basket."""
+    async def async_add_to_basket(
+        self, product_id: str, quantity: int = 1
+    ) -> BasketOperationResult:
+        """Add item to shopping basket with validation.
+
+        Args:
+            product_id: Product identifier
+            quantity: Quantity to add
+
+        Returns:
+            BasketOperationResult with success status, message, and response data
+        """
         if not self._logged_in:
             await self.async_login()
 
         try:
-            await self._rate_limit()
+            await self._rate_limit(is_write=True)  # Use write rate limit
 
             # Prepare basket addition request
             basket_add_url = f"{TESCO_GROCERIES_URL}/api/basket/add"
@@ -410,18 +552,52 @@ class TescoAPI:
                 json=data,
                 headers=headers,
             ) as response:
+                response_text = await response.text()
+
+                # Validate response
                 if response.status in (200, 201):
-                    _LOGGER.info("Added item to basket")
-                    return True
+                    try:
+                        response_data = await response.json() if response_text else {}
+                    except Exception:
+                        response_data = {"raw_response": response_text}
+
+                    _LOGGER.info("Successfully added item to basket")
+                    return {
+                        "success": True,
+                        "message": "Item added to basket successfully",
+                        "response_data": response_data,
+                    }
                 else:
-                    _LOGGER.warning("Failed to add to basket: %s", response.status)
-                    return False
+                    _LOGGER.warning(
+                        "Failed to add to basket: HTTP %s - %s",
+                        response.status,
+                        response_text[:200],
+                    )
+                    return {
+                        "success": False,
+                        "message": f"Failed with HTTP {response.status}",
+                        "response_data": {
+                            "status": response.status,
+                            "error": response_text[:200],
+                        },
+                    }
 
-        except Exception:
-            _LOGGER.error("Error adding to basket")
-            return False
+        except TescoAuthError as err:
+            _LOGGER.error("Authentication error adding to basket: %s", err)
+            return {
+                "success": False,
+                "message": f"Authentication error: {err}",
+                "response_data": None,
+            }
+        except Exception as err:
+            _LOGGER.error("Error adding to basket: %s", err)
+            return {
+                "success": False,
+                "message": f"Error: {err}",
+                "response_data": None,
+            }
 
-    async def async_get_basket(self) -> list[dict[str, Any]]:
+    async def async_get_basket(self) -> list[BasketItemDict]:
         """Get current basket items."""
         if not self._logged_in:
             await self.async_login()
@@ -439,6 +615,11 @@ class TescoAPI:
                     # Use specific basket item selectors
                     item_elements = soup.find_all(
                         ["div", "li"], class_=re.compile(r"basket-item|cart-item", re.I)
+                    )
+
+                    # Validate selector results
+                    self._validate_selector_results(
+                        len(item_elements), "basket_items", warn_only=True
                     )
 
                     for elem in item_elements:

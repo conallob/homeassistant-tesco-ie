@@ -21,7 +21,7 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-STORAGE_VERSION = 1
+STORAGE_VERSION = 2  # Incremented for delivery metadata support
 STORAGE_KEY = "tesco_ie_inventory"
 
 
@@ -106,10 +106,20 @@ class TescoInventorySensor(TescoBaseSensor):
         )
 
     async def async_load_inventory(self) -> None:
-        """Load inventory from persistent storage."""
+        """Load inventory from persistent storage with migration support."""
         try:
             data = await self._store.async_load()
             if data is not None:
+                # Check storage version and migrate if needed
+                stored_version = data.get("version", 1)
+                if stored_version < STORAGE_VERSION:
+                    _LOGGER.info(
+                        "Migrating inventory storage from version %d to %d",
+                        stored_version,
+                        STORAGE_VERSION,
+                    )
+                    data = await self._migrate_storage(data, stored_version)
+
                 self._inventory = data.get("inventory", {})
                 _LOGGER.debug(
                     "Loaded %d items from inventory storage", len(self._inventory)
@@ -118,16 +128,56 @@ class TescoInventorySensor(TescoBaseSensor):
             _LOGGER.error("Failed to load inventory: %s", err)
             self._inventory = {}
 
+    async def _migrate_storage(
+        self, data: dict[str, Any], from_version: int
+    ) -> dict[str, Any]:
+        """Migrate storage from old version to current version.
+
+        Args:
+            data: Current storage data
+            from_version: Version to migrate from
+
+        Returns:
+            Migrated storage data
+        """
+        inventory = data.get("inventory", {})
+
+        if from_version == 1:
+            # Migrate from version 1 to version 2
+            # Add delivery metadata to existing items
+            _LOGGER.debug("Migrating from version 1 to version 2")
+            for product_id, item_data in inventory.items():
+                if "deliveries" not in item_data:
+                    # Convert old format to new format with delivery tracking
+                    quantity = item_data.get("quantity", 0)
+                    item_data["deliveries"] = [
+                        {
+                            "batch_id": "migrated",
+                            "quantity": quantity,
+                            "delivered_at": item_data.get(
+                                "added", datetime.now().isoformat()
+                            ),
+                            "order_number": None,
+                        }
+                    ]
+                    # Keep total quantity for backwards compatibility
+                    item_data["quantity"] = quantity
+
+        data["version"] = STORAGE_VERSION
+        data["inventory"] = inventory
+        return data
+
     async def async_save_inventory(self) -> None:
-        """Save inventory to persistent storage."""
+        """Save inventory to persistent storage with version."""
         try:
             await self._store.async_save(
                 {
+                    "version": STORAGE_VERSION,
                     "inventory": self._inventory,
                     "last_saved": datetime.now().isoformat(),
                 }
             )
-            _LOGGER.debug("Saved inventory to storage")
+            _LOGGER.debug("Saved inventory to storage (version %d)", STORAGE_VERSION)
         except Exception as err:
             _LOGGER.error("Failed to save inventory: %s", err)
 
@@ -145,43 +195,113 @@ class TescoInventorySensor(TescoBaseSensor):
             "total_items": len(self._inventory),
         }
 
-    async def async_add_items_from_receipt(self, items: list[dict[str, Any]]) -> None:
-        """Add items from a delivery receipt."""
+    async def async_add_items_from_receipt(
+        self, items: list[dict[str, Any]], order_number: str | None = None
+    ) -> None:
+        """Add items from a delivery receipt with delivery metadata.
+
+        Args:
+            items: List of items from the receipt
+            order_number: Optional order number for tracking
+        """
         _LOGGER.info("Adding %d items from receipt to inventory", len(items))
+        delivered_at = datetime.now().isoformat()
+        batch_id = f"delivery_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
         for item in items:
             product_id = item.get("id", item.get("name", "unknown"))
             quantity = item.get("quantity", 1)
 
             if product_id in self._inventory:
+                # Add new delivery batch to existing item
                 self._inventory[product_id]["quantity"] += quantity
-                self._inventory[product_id]["last_added"] = datetime.now().isoformat()
+                self._inventory[product_id]["last_added"] = delivered_at
+                self._inventory[product_id]["deliveries"].append(
+                    {
+                        "batch_id": batch_id,
+                        "quantity": quantity,
+                        "delivered_at": delivered_at,
+                        "order_number": order_number,
+                    }
+                )
             else:
+                # Create new item with delivery metadata
                 self._inventory[product_id] = {
                     "name": item.get("name", "Unknown"),
                     "quantity": quantity,
                     "unit": item.get("unit", "item"),
-                    "added": datetime.now().isoformat(),
-                    "last_added": datetime.now().isoformat(),
+                    "added": delivered_at,
+                    "last_added": delivered_at,
+                    "deliveries": [
+                        {
+                            "batch_id": batch_id,
+                            "quantity": quantity,
+                            "delivered_at": delivered_at,
+                            "order_number": order_number,
+                        }
+                    ],
                 }
 
         await self.async_save_inventory()
         self.async_write_ha_state()
 
     async def async_remove_item(self, product_id: str, quantity: int = 1) -> None:
-        """Remove item from inventory."""
+        """Remove item from inventory using FIFO (First In, First Out).
+
+        Removes items from oldest delivery batches first.
+
+        Args:
+            product_id: Product identifier
+            quantity: Quantity to remove
+        """
         if product_id in self._inventory:
-            self._inventory[product_id]["quantity"] -= quantity
-            if self._inventory[product_id]["quantity"] <= 0:
+            remaining_to_remove = quantity
+            item = self._inventory[product_id]
+            deliveries = item.get("deliveries", [])
+
+            # Remove from deliveries using FIFO
+            updated_deliveries = []
+            for delivery in deliveries:
+                if remaining_to_remove <= 0:
+                    # Keep remaining deliveries
+                    updated_deliveries.append(delivery)
+                elif delivery["quantity"] <= remaining_to_remove:
+                    # Remove entire delivery batch
+                    remaining_to_remove -= delivery["quantity"]
+                    _LOGGER.debug(
+                        "Removed entire batch %s (%d items)",
+                        delivery["batch_id"],
+                        delivery["quantity"],
+                    )
+                else:
+                    # Partially remove from this batch
+                    delivery["quantity"] -= remaining_to_remove
+                    _LOGGER.debug(
+                        "Removed %d items from batch %s",
+                        remaining_to_remove,
+                        delivery["batch_id"],
+                    )
+                    remaining_to_remove = 0
+                    updated_deliveries.append(delivery)
+
+            # Update total quantity
+            item["quantity"] -= quantity
+            item["deliveries"] = updated_deliveries
+
+            if item["quantity"] <= 0:
                 del self._inventory[product_id]
-                _LOGGER.debug("Removed product from inventory")
+                _LOGGER.debug("Removed product from inventory completely")
             else:
-                _LOGGER.debug("Reduced quantity in inventory")
+                _LOGGER.debug(
+                    "Reduced quantity in inventory to %d (across %d batches)",
+                    item["quantity"],
+                    len(updated_deliveries),
+                )
 
             await self.async_save_inventory()
             self.async_write_ha_state()
         else:
-            _LOGGER.warning("Product not found in inventory")
+            _LOGGER.warning("Product %s not found in inventory", product_id)
 
     async def async_will_remove_from_hass(self) -> None:
         """Run when entity will be removed from hass."""

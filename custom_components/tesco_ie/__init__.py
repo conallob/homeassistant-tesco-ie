@@ -125,11 +125,33 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         try:
             products = await api.async_search_products(product_name)
             if products:
-                await api.async_add_to_basket(products[0]["id"], quantity)
-                _LOGGER.info("Added item to basket")
+                result = await api.async_add_to_basket(products[0]["id"], quantity)
+                if result["success"]:
+                    _LOGGER.info("Added item to basket")
+                else:
+                    # Create persistent notification for failure
+                    hass.components.persistent_notification.async_create(
+                        f"Failed to add '{product_name}' to basket: {result['message']}",
+                        title="Tesco Basket Error",
+                        notification_id=f"tesco_basket_error_{entry_id or 'default'}",
+                    )
+                    _LOGGER.error("Failed to add to basket: %s", result["message"])
             else:
-                _LOGGER.warning("Product not found")
+                # Create persistent notification for product not found
+                hass.components.persistent_notification.async_create(
+                    f"Product '{product_name}' not found in search results. "
+                    "Please verify the product name.",
+                    title="Tesco Product Not Found",
+                    notification_id=f"tesco_product_not_found_{entry_id or 'default'}",
+                )
+                _LOGGER.warning("Product not found: %s", product_name)
         except (TescoAuthError, TescoAPIError) as err:
+            # Create persistent notification for API errors
+            hass.components.persistent_notification.async_create(
+                f"Error adding '{product_name}' to basket: {err}",
+                title="Tesco API Error",
+                notification_id=f"tesco_api_error_{entry_id or 'default'}",
+            )
             _LOGGER.error("Failed to add to basket: %s", err)
 
     async def handle_ingest_receipt(call: ServiceCall) -> None:
