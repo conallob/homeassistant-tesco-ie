@@ -1,0 +1,75 @@
+add_to_basket:
+  name: Add to Basket
+  description: Add a product to your Tesco shopping basket
+  fields:
+    product_name:
+      name: Product Name
+      description: The name of the product to add
+      required: true
+      example: "Milk"
+      selector:
+        text:
+    quantity:
+      name: Quantity
+      description: Number of items to add
+      required: false
+      default: 1
+      example: 2
+      selector:
+        number:
+          min: 1
+          max: 99
+          mode: box
+
+ingest_receipt:
+  name: Ingest Receipt
+  description: Add items from a delivery receipt to your home inventory
+  fields:
+    items:
+      name: Items
+      description: List of items from the receipt
+      required: true
+      example: |
+        - name: "Milk"
+          id: "12345"
+          quantity: 2
+          unit: "liters"
+        - name: "Bread"
+          quantity: 1
+      selector:
+        object:
+
+remove_from_inventory:
+  name: Remove from Inventory
+  description: Remove an item from your home inventory
+  fields:
+    product_id:
+      name: Product ID
+      description: The ID of the product to remove
+      required: true
+      example: "milk_2l"
+      selector:
+        text:
+    quantity:
+      name: Quantity
+      description: Number of items to remove
+      required: false
+      default: 1
+      example: 1
+      selector:
+        number:
+          min: 1
+          max: 99
+          mode: box
+
+search_products:
+  name: Search Products
+  description: Search for products in Tesco
+  fields:
+    query:
+      name: Search Query
+      description: The search term
+      required: true
+      example: "organic milk"
+      selector:
+        text:
