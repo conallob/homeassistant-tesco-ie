@@ -103,35 +103,25 @@ async def test_unknown_error(hass: HomeAssistant):
 @pytest.mark.asyncio
 async def test_duplicate_entry(hass: HomeAssistant, mock_tesco_api):
     """Test that duplicate entries are prevented."""
-    # Create first entry
-    entry = config_entries.ConfigEntry(
-        version=1,
-        minor_version=0,
-        domain=DOMAIN,
-        title="Tesco IE (test@example.com)",
-        data={
-            CONF_EMAIL: "test@example.com",
-            CONF_PASSWORD: "password123",
-        },
-        source=config_entries.SOURCE_USER,
-        unique_id="test@example.com",
-    )
-
-    hass.config_entries._entries[entry.entry_id] = entry
-
-    flow = TescoIEConfigFlow()
-    flow.hass = hass
+    # Create and add first entry using the proper API
+    entry_data = {
+        CONF_EMAIL: "test@example.com",
+        CONF_PASSWORD: "password123",
+    }
 
     with patch(
         "custom_components.tesco_ie.config_flow.TescoAPI",
         return_value=mock_tesco_api,
     ):
-        result = await flow.async_step_user(
-            user_input={
-                CONF_EMAIL: "test@example.com",
-                CONF_PASSWORD: "password123",
-            }
-        )
+        # Setup first entry
+        first_flow = TescoIEConfigFlow()
+        first_flow.hass = hass
+        await first_flow.async_step_user(user_input=entry_data)
+
+        # Try to add duplicate
+        flow = TescoIEConfigFlow()
+        flow.hass = hass
+        result = await flow.async_step_user(user_input=entry_data)
 
     assert result["type"] == data_entry_flow.FlowResultType.ABORT
     assert result["reason"] == "already_configured"

@@ -40,7 +40,9 @@ def mock_tesco_api():
                 {"id": "67890", "name": "Milk 1L", "price": "€0.99"},
             ]
         )
-        api_instance.async_add_to_basket = AsyncMock(return_value=True)
+        api_instance.async_add_to_basket = AsyncMock(
+            return_value={"success": True, "message": "Item added", "response_data": {}}
+        )
         api_instance.async_get_basket = AsyncMock(
             return_value=[
                 {"name": "Milk 2L", "quantity": 2},
@@ -54,15 +56,19 @@ def mock_tesco_api():
 @pytest.fixture
 def mock_config_entry():
     """Mock a config entry."""
-    return MagicMock(
+    entry = MagicMock(
         domain=DOMAIN,
         data={
             CONF_EMAIL: "test@example.com",
             CONF_PASSWORD: "test_password",
         },
+        options={},
         entry_id="test_entry_id",
         title="Tesco IE (test@example.com)",
     )
+    entry.add_update_listener = MagicMock(return_value=lambda: None)
+    entry.async_on_unload = MagicMock()
+    return entry
 
 
 @pytest.fixture

@@ -231,8 +231,9 @@ class TescoAPI:
         # Look for CSRF token in script tags
         for script in soup.find_all("script"):
             if script.string:
+                # Try both assignment (=) and property (:) patterns
                 csrf_match = re.search(
-                    r'csrfToken["\']?\s*:\s*["\']([^"\']+)', script.string
+                    r'csrfToken["\']?\s*[=:]\s*["\']([^"\']+)', script.string
                 )
                 if csrf_match:
                     _LOGGER.debug("Found CSRF token in script")

@@ -19,9 +19,8 @@ async def test_setup_entry_success(hass: HomeAssistant, mock_tesco_api, mock_con
     with patch(
         "custom_components.tesco_ie.TescoAPI",
         return_value=mock_tesco_api,
-    ), patch(
-        "custom_components.tesco_ie.async_forward_entry_setups",
-        return_value=True,
+    ), patch.object(
+        hass.config_entries, "async_forward_entry_setups", return_value=True
     ) as mock_forward:
         result = await async_setup_entry(hass, mock_config_entry)
 
@@ -36,8 +35,10 @@ async def test_setup_entry_success(hass: HomeAssistant, mock_tesco_api, mock_con
 @pytest.mark.asyncio
 async def test_setup_entry_auth_failure(hass: HomeAssistant, mock_config_entry):
     """Test setup fails with authentication error."""
+    from custom_components.tesco_ie.tesco_api import TescoAuthError
+
     mock_api = AsyncMock()
-    mock_api.async_login.side_effect = Exception("Auth failed")
+    mock_api.async_login.side_effect = TescoAuthError("Auth failed")
 
     with patch(
         "custom_components.tesco_ie.TescoAPI",
@@ -54,18 +55,16 @@ async def test_unload_entry(hass: HomeAssistant, mock_tesco_api, mock_config_ent
     with patch(
         "custom_components.tesco_ie.TescoAPI",
         return_value=mock_tesco_api,
-    ), patch(
-        "custom_components.tesco_ie.async_forward_entry_setups",
-        return_value=True,
+    ), patch.object(
+        hass.config_entries, "async_forward_entry_setups", return_value=True
     ):
         await async_setup_entry(hass, mock_config_entry)
 
     assert mock_config_entry.entry_id in hass.data[DOMAIN]
 
     # Now unload
-    with patch(
-        "custom_components.tesco_ie.async_unload_platforms",
-        return_value=True,
+    with patch.object(
+        hass.config_entries, "async_unload_platforms", return_value=True
     ):
         result = await async_unload_entry(hass, mock_config_entry)
 
@@ -79,9 +78,8 @@ async def test_coordinator_update(hass: HomeAssistant, mock_tesco_api, mock_conf
     with patch(
         "custom_components.tesco_ie.TescoAPI",
         return_value=mock_tesco_api,
-    ), patch(
-        "custom_components.tesco_ie.async_forward_entry_setups",
-        return_value=True,
+    ), patch.object(
+        hass.config_entries, "async_forward_entry_setups", return_value=True
     ):
         await async_setup_entry(hass, mock_config_entry)
 
