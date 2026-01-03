@@ -141,13 +141,31 @@ automation:
 
 ## Development Status
 
-This integration is currently in development. The Tesco API client (`tesco_api.py`) contains placeholder implementations that need to be replaced with actual API calls or web scraping logic to interact with Tesco Ireland's services.
+This integration uses web scraping to interact with Tesco Ireland's website. The implementation includes:
 
-### Implementation Notes
+- **Session Management**: Persistent cookie jar and session handling
+- **CSRF Token Handling**: Automatic extraction and submission of CSRF tokens
+- **Rate Limiting**: Built-in delays to avoid triggering anti-bot protection
+- **Browser Emulation**: Proper user agent and headers to mimic real browser behavior
 
-- Authentication with Tesco Ireland requires reverse engineering their API or implementing web scraping
-- Product search and basket management will need actual API endpoints or DOM manipulation
-- Receipt parsing may require OCR or structured data from Tesco's order confirmation emails
+### Implementation Details
+
+The `tesco_api.py` module implements web scraping with:
+
+- **Authentication**: Form-based login with email/password
+- **Cookie Persistence**: Session cookies maintained across requests
+- **HTML Parsing**: BeautifulSoup4 and lxml for parsing page content
+- **Error Handling**: Comprehensive error detection and logging
+- **Flexible Selectors**: Regex-based element matching to handle site changes
+
+### Important Notes
+
+- **Site Changes**: Tesco may update their website structure, requiring selector updates
+- **Anti-Bot Protection**: Tesco uses bot detection; excessive requests may be blocked
+- **Rate Limiting**: The integration implements 1-second delays between requests
+- **Login Required**: All features require valid Tesco Ireland credentials
+- **Testing**: The actual URLs and selectors may need adjustment based on real website structure
+- **Receipt Parsing**: Currently requires manual service calls; automatic email parsing not yet implemented
 
 ## Contributing
 
