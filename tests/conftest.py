@@ -158,13 +158,13 @@ def mock_product_search_response():
         return_value="""
         <html>
             <body>
-                <div class="product-item" data-product-id="12345">
+                <div class="product-tile" data-product-id="12345">
                     <h3 class="product-name">Milk 2L</h3>
-                    <span class="price">€1.50</span>
+                    <span class="price-value">€1.50</span>
                 </div>
-                <div class="product-item" data-product-id="67890">
+                <div class="product-tile" data-product-id="67890">
                     <h3 class="product-name">Milk 1L</h3>
-                    <span class="price">€0.99</span>
+                    <span class="price-value">€0.99</span>
                 </div>
             </body>
         </html>

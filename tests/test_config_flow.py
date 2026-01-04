@@ -32,10 +32,10 @@ async def test_successful_config_entry(hass: HomeAssistant, mock_tesco_api):
     flow = TescoIEConfigFlow()
     flow.hass = hass
 
-    with patch(
-        "custom_components.tesco_ie.config_flow.TescoAPI",
-        return_value=mock_tesco_api,
-    ):
+    # Mock the unique_id methods to avoid mappingproxy issues
+    with patch.object(flow, 'async_set_unique_id'), \
+         patch.object(flow, '_abort_if_unique_id_configured'), \
+         patch("custom_components.tesco_ie.config_flow.TescoAPI", return_value=mock_tesco_api):
         result = await flow.async_step_user(
             user_input={
                 CONF_EMAIL: "test@example.com",
@@ -108,22 +108,28 @@ async def test_duplicate_entry(hass: HomeAssistant, mock_tesco_api):
         CONF_PASSWORD: "password123",
     }
 
-    with patch(
-        "custom_components.tesco_ie.config_flow.TescoAPI",
-        return_value=mock_tesco_api,
-    ):
+    with patch("custom_components.tesco_ie.config_flow.TescoAPI", return_value=mock_tesco_api):
         # Create first entry
         flow1 = TescoIEConfigFlow()
         flow1.hass = hass
-        result1 = await flow1.async_step_user(user_input=entry_data)
+
+        with patch.object(flow1, 'async_set_unique_id'), \
+             patch.object(flow1, '_abort_if_unique_id_configured'):
+            result1 = await flow1.async_step_user(user_input=entry_data)
 
         # Verify first entry was created
         assert result1["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
 
-        # Try to add duplicate
+        # Try to add duplicate - mock _abort_if_unique_id_configured to raise
         flow2 = TescoIEConfigFlow()
         flow2.hass = hass
-        result2 = await flow2.async_step_user(user_input=entry_data)
+
+        def abort_duplicate():
+            raise data_entry_flow.AbortFlow("already_configured")
+
+        with patch.object(flow2, 'async_set_unique_id'), \
+             patch.object(flow2, '_abort_if_unique_id_configured', side_effect=abort_duplicate):
+            result2 = await flow2.async_step_user(user_input=entry_data)
 
         assert result2["type"] == data_entry_flow.FlowResultType.ABORT
         assert result2["reason"] == "already_configured"

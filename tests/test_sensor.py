@@ -27,6 +27,8 @@ def mock_coordinator():
         "order_number": "123456",
         "basket_items": [],
     }
+    coordinator.last_update_success = True
+    coordinator.last_update_success_time = datetime.now()
     return coordinator
 
 
