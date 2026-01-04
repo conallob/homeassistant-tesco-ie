@@ -31,3 +31,8 @@ DEFAULT_UPDATE_INTERVAL = 300  # 5 minutes
 DEFAULT_TIMEOUT = 30  # seconds
 DEFAULT_RATE_LIMIT_READ = 1.0  # seconds
 DEFAULT_RATE_LIMIT_WRITE = 2.0  # seconds
+
+# Input validation limits
+MAX_PRODUCT_NAME_LENGTH = 100  # Maximum length for product names and search queries
+MAX_QUANTITY = 99  # Maximum quantity for basket operations
+MAX_SEARCH_RESULTS = 10  # Maximum number of search results to return

@@ -1,4 +1,15 @@
-"""Tesco Ireland API client with web scraping."""
+"""Tesco Ireland API client with web scraping.
+
+IMPORTANT: This implementation uses placeholder HTML selectors for demonstration purposes.
+Before using in production, you MUST:
+1. Inspect actual Tesco.ie HTML structure using browser developer tools
+2. Update all CSS selectors to match real page elements
+3. Test extensively with real credentials against the live site
+4. Handle anti-bot measures (CAPTCHA, rate limiting, account lockouts)
+
+The current selectors are generic patterns that may not work with the actual Tesco.ie website.
+This serves as a template that requires site-specific customization.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +22,8 @@ from typing import Any, TypedDict
 import aiohttp
 from aiohttp import CookieJar
 from bs4 import BeautifulSoup
+
+from .const import MAX_SEARCH_RESULTS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -72,7 +85,6 @@ USER_AGENT = (
 )
 
 # Constants
-MAX_SEARCH_RESULTS = 10
 RATE_LIMIT_DELAY_READ = 1.0  # seconds for read operations
 RATE_LIMIT_DELAY_WRITE = 2.0  # seconds for write operations (more conservative)
 DEFAULT_TIMEOUT = 30  # seconds
@@ -278,7 +290,18 @@ class TescoAPI:
         return True
 
     async def async_login(self) -> bool:
-        """Login to Tesco Ireland using web scraping with exponential backoff."""
+        """Login to Tesco Ireland using web scraping with exponential backoff.
+
+        Note: This implementation does NOT handle anti-bot measures such as:
+        - CAPTCHA challenges
+        - IP-based rate limiting beyond basic exponential backoff
+        - Account lockouts from suspicious activity
+
+        If you encounter authentication failures, you may need to:
+        - Manually log in through a browser to solve CAPTCHA
+        - Wait for IP rate limits to reset
+        - Contact Tesco support if your account is locked
+        """
         _LOGGER.info("Authenticating with Tesco Ireland")
 
         # Implement exponential backoff for failed login attempts
@@ -299,87 +322,97 @@ class TescoAPI:
 
         try:
             await self._create_session()
-            await self._rate_limit()
 
-            # Step 1: Get the login page to obtain CSRF token and cookies
-            async with self._session.get(TESCO_LOGIN_URL) as response:
-                if response.status != 200:
-                    raise TescoAuthError(
-                        f"Failed to load login page: {response.status}"
-                    )
+            try:
+                await self._rate_limit()
 
-                html = await response.text()
-                self._csrf_token = await self._get_csrf_token(html)
+                # Step 1: Get the login page to obtain CSRF token and cookies
+                async with self._session.get(TESCO_LOGIN_URL) as response:
+                    if response.status != 200:
+                        raise TescoAuthError(
+                            f"Failed to load login page: {response.status}"
+                        )
 
-            await self._rate_limit()
-
-            # Step 2: Submit login credentials
-            login_data = {
-                "username": self.email,
-                "password": self.password,
-            }
-
-            if self._csrf_token:
-                login_data["_csrf"] = self._csrf_token
-
-            headers = {
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Referer": TESCO_LOGIN_URL,
-                "Origin": TESCO_BASE_URL,
-            }
-
-            async with self._session.post(
-                TESCO_LOGIN_URL,
-                data=login_data,
-                headers=headers,
-                allow_redirects=True,
-            ) as response:
-                # Check if login was successful
-                if response.status in (200, 302, 303):
-                    # Verify we're logged in by checking for account-specific content
                     html = await response.text()
+                    self._csrf_token = await self._get_csrf_token(html)
 
-                    # Look for indicators of successful login
-                    found_indicators = [
-                        indicator
-                        for indicator in LOGIN_SUCCESS_INDICATORS
-                        if indicator in html.lower()
-                    ]
+                await self._rate_limit()
 
-                    if found_indicators:
-                        self._logged_in = True
-                        self._failed_login_attempts = 0  # Reset on success
-                        _LOGGER.info("Successfully authenticated")
-                        _LOGGER.debug(
-                            "Login verified by indicators: %s",
-                            ", ".join(found_indicators),
-                        )
-                        return True
+                # Step 2: Submit login credentials
+                login_data = {
+                    "username": self.email,
+                    "password": self.password,
+                }
+
+                if self._csrf_token:
+                    login_data["_csrf"] = self._csrf_token
+
+                headers = {
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Referer": TESCO_LOGIN_URL,
+                    "Origin": TESCO_BASE_URL,
+                }
+
+                async with self._session.post(
+                    TESCO_LOGIN_URL,
+                    data=login_data,
+                    headers=headers,
+                    allow_redirects=True,
+                ) as response:
+                    # Check if login was successful
+                    if response.status in (200, 302, 303):
+                        # Verify we're logged in by checking for account-specific content
+                        html = await response.text()
+
+                        # Look for indicators of successful login
+                        found_indicators = [
+                            indicator
+                            for indicator in LOGIN_SUCCESS_INDICATORS
+                            if indicator in html.lower()
+                        ]
+
+                        if found_indicators:
+                            self._logged_in = True
+                            self._failed_login_attempts = 0  # Reset on success
+                            # Clear password from memory after successful login for security
+                            self.password = None
+                            _LOGGER.info("Successfully authenticated")
+                            _LOGGER.debug(
+                                "Login verified by indicators: %s",
+                                ", ".join(found_indicators),
+                            )
+                            return True
+                        else:
+                            # Check for error messages
+                            soup = BeautifulSoup(html, "lxml")
+                            error_elements = soup.find_all(
+                                class_=re.compile(r"error|alert|warning", re.I)
+                            )
+                            error_msg = " ".join(
+                                elem.get_text(strip=True) for elem in error_elements[:3]
+                            )
+                            self._failed_login_attempts += 1
+                            _LOGGER.warning(
+                                "Login attempt %d failed: invalid credentials",
+                                self._failed_login_attempts,
+                            )
+                            raise TescoAuthError(
+                                f"Login failed: {error_msg or 'Invalid credentials'}"
+                            )
                     else:
-                        # Check for error messages
-                        soup = BeautifulSoup(html, "lxml")
-                        error_elements = soup.find_all(
-                            class_=re.compile(r"error|alert|warning", re.I)
-                        )
-                        error_msg = " ".join(
-                            elem.get_text(strip=True) for elem in error_elements[:3]
-                        )
                         self._failed_login_attempts += 1
                         _LOGGER.warning(
-                            "Login attempt %d failed: invalid credentials",
+                            "Login attempt %d failed: HTTP %s",
                             self._failed_login_attempts,
+                            response.status,
                         )
-                        raise TescoAuthError(
-                            f"Login failed: {error_msg or 'Invalid credentials'}"
-                        )
-                else:
-                    self._failed_login_attempts += 1
-                    _LOGGER.warning(
-                        "Login attempt %d failed: HTTP %s",
-                        self._failed_login_attempts,
-                        response.status,
-                    )
-                    raise TescoAuthError(f"Login failed with status: {response.status}")
+                        raise TescoAuthError(f"Login failed with status: {response.status}")
+            except (aiohttp.ClientError, TescoAuthError):
+                # Clean up session on error
+                if self._session and not self._session.closed:
+                    await self._session.close()
+                    self._session = None
+                raise
 
         except aiohttp.ClientError as err:
             self._failed_login_attempts += 1
@@ -390,10 +423,15 @@ class TescoAPI:
         except TescoAuthError:
             # Re-raise TescoAuthError without incrementing counter again
             raise
-        except Exception as err:
+        except (BeautifulSoup, ValueError) as err:
+            # Handle specific parsing errors
             self._failed_login_attempts += 1
-            _LOGGER.error("Login failed (attempt %d)", self._failed_login_attempts)
-            raise TescoAuthError(f"Failed to authenticate: {err}") from err
+            _LOGGER.error(
+                "HTML parsing error during login (attempt %d): %s",
+                self._failed_login_attempts,
+                err
+            )
+            raise TescoAuthError(f"Failed to parse login response: {err}") from err
 
     async def async_get_data(self) -> TescoDataDict:
         """Fetch data from Tesco including Clubcard points and delivery info."""

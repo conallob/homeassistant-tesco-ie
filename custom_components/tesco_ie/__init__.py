@@ -25,6 +25,8 @@ from .const import (
     DEFAULT_TIMEOUT,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
+    MAX_PRODUCT_NAME_LENGTH,
+    MAX_QUANTITY,
     SERVICE_ADD_TO_BASKET,
     SERVICE_INGEST_RECEIPT,
     SERVICE_REMOVE_FROM_INVENTORY,
@@ -35,9 +37,6 @@ from .tesco_api import TescoAPI, TescoAPIError, TescoAuthError
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
-
-# Key for tracking service registration in hass.data
-SERVICES_KEY = "services_registered"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -140,8 +139,8 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 async def async_setup_services(hass: HomeAssistant) -> None:
     """Set up services for Tesco integration (global, not per-entry)."""
-    # Track service registration in hass.data instead of global variable
-    if hass.data[DOMAIN].get(SERVICES_KEY):
+    # Use thread-safe service check to prevent race conditions
+    if hass.services.has_service(DOMAIN, SERVICE_ADD_TO_BASKET):
         return
 
     async def handle_add_to_basket(call: ServiceCall) -> None:
@@ -157,18 +156,22 @@ async def async_setup_services(hass: HomeAssistant) -> None:
 
         # Sanitize product name: remove excessive whitespace and limit length
         product_name = " ".join(product_name.split())
-        if len(product_name) > 100:
-            _LOGGER.warning("Product name too long, truncating to 100 characters")
-            product_name = product_name[:100]
+        if len(product_name) > MAX_PRODUCT_NAME_LENGTH:
+            _LOGGER.warning(
+                "Product name too long, truncating to %d characters",
+                MAX_PRODUCT_NAME_LENGTH
+            )
+            product_name = product_name[:MAX_PRODUCT_NAME_LENGTH]
 
         # Validate characters (allow alphanumeric, spaces, and common punctuation)
-        if not all(c.isalnum() or c.isspace() or c in "'-.,&()%" for c in product_name):
+        # Removed % to prevent potential URL encoding injection attacks
+        if not all(c.isalnum() or c.isspace() or c in "'-.,&()" for c in product_name):
             _LOGGER.error("Product name contains invalid characters")
             return
 
         # Validate quantity
-        if not isinstance(quantity, int) or quantity < 1 or quantity > 99:
-            _LOGGER.error("Invalid quantity: must be between 1 and 99")
+        if not isinstance(quantity, int) or quantity < 1 or quantity > MAX_QUANTITY:
+            _LOGGER.error("Invalid quantity: must be between 1 and %d", MAX_QUANTITY)
             return
 
         # Get API instance - use specified entry_id or first available
@@ -326,12 +329,16 @@ async def async_setup_services(hass: HomeAssistant) -> None:
 
         # Sanitize query: remove excessive whitespace and limit length
         query = " ".join(query.split())
-        if len(query) > 100:
-            _LOGGER.warning("Query too long, truncating to 100 characters")
-            query = query[:100]
+        if len(query) > MAX_PRODUCT_NAME_LENGTH:
+            _LOGGER.warning(
+                "Query too long, truncating to %d characters",
+                MAX_PRODUCT_NAME_LENGTH
+            )
+            query = query[:MAX_PRODUCT_NAME_LENGTH]
 
         # Validate characters
-        if not all(c.isalnum() or c.isspace() or c in "'-.,&()%" for c in query):
+        # Removed % to prevent potential URL encoding injection attacks
+        if not all(c.isalnum() or c.isspace() or c in "'-.,&()" for c in query):
             _LOGGER.error("Query contains invalid characters")
             return
 
@@ -419,8 +426,6 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         ),
     )
 
-    # Mark services as registered in hass.data (not global variable)
-    hass.data[DOMAIN][SERVICES_KEY] = True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -441,6 +446,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_remove(DOMAIN, SERVICE_INGEST_RECEIPT)
         hass.services.async_remove(DOMAIN, SERVICE_REMOVE_FROM_INVENTORY)
         hass.services.async_remove(DOMAIN, SERVICE_SEARCH_PRODUCTS)
-        hass.data[DOMAIN].pop(SERVICES_KEY, None)
 
     return unload_ok
