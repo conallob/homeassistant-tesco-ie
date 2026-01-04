@@ -78,6 +78,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await api.async_login()
     except (TescoAuthError, TescoAPIError) as err:
         _LOGGER.error("Failed to authenticate with Tesco")
+        # Clean up API session on failed login
+        await api.async_close()
         raise ConfigEntryAuthFailed from err
 
     async def async_update_data():

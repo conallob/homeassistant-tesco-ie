@@ -7,6 +7,6 @@
   "documentation": "https://github.com/conallob/homeassistant-tesco-ie",
   "integration_type": "service",
   "iot_class": "cloud_polling",
-  "requirements": ["aiohttp>=3.8.0", "beautifulsoup4>=4.11.0", "lxml>=4.9.0"],
+  "requirements": ["aiohttp>=3.9.0", "beautifulsoup4>=4.11.0", "lxml>=4.9.0"],
   "version": "1.0.0"
 }

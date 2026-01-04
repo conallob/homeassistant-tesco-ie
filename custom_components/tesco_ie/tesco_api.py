@@ -24,7 +24,7 @@ import aiohttp
 from aiohttp import CookieJar
 from bs4 import BeautifulSoup
 
-from .const import MAX_SEARCH_RESULTS
+from .const import MAX_LOGIN_ATTEMPTS, MAX_SEARCH_RESULTS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -304,6 +304,13 @@ class TescoAPI:
         - Contact Tesco support if your account is locked
         """
         _LOGGER.info("Authenticating with Tesco Ireland")
+
+        # Check if max login attempts exceeded
+        if self._failed_login_attempts >= MAX_LOGIN_ATTEMPTS:
+            raise TescoAuthError(
+                f"Maximum login attempts ({MAX_LOGIN_ATTEMPTS}) exceeded. "
+                "Please wait before trying again or check your credentials."
+            )
 
         # Implement exponential backoff for failed login attempts
         if self._failed_login_attempts > 0 and self._last_login_attempt_time:
