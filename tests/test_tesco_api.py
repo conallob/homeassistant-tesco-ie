@@ -95,17 +95,17 @@ async def test_successful_login(mock_successful_login_response):
     api = TescoAPI("test@example.com", "password123")
 
     with patch("aiohttp.ClientSession") as mock_session_class:
-        mock_session = AsyncMock()
+        mock_session = MagicMock()
         mock_session.closed = False
         mock_session_class.return_value = mock_session
 
         # Mock GET request for login page
-        mock_session.get = AsyncMock(
+        mock_session.get = MagicMock(
             return_value=AsyncContextManagerMock(mock_successful_login_response)
         )
 
         # Mock POST request for login submission
-        mock_session.post = AsyncMock(
+        mock_session.post = MagicMock(
             return_value=AsyncContextManagerMock(mock_successful_login_response)
         )
 
@@ -124,17 +124,17 @@ async def test_failed_login(
     api = TescoAPI("test@example.com", "wrong_password")
 
     with patch("aiohttp.ClientSession") as mock_session_class:
-        mock_session = AsyncMock()
+        mock_session = MagicMock()
         mock_session.closed = False
         mock_session_class.return_value = mock_session
 
         # Mock GET request (successful to get login page)
-        mock_session.get = AsyncMock(
+        mock_session.get = MagicMock(
             return_value=AsyncContextManagerMock(mock_successful_login_response)
         )
 
         # Mock POST request with failed response
-        mock_session.post = AsyncMock(
+        mock_session.post = MagicMock(
             return_value=AsyncContextManagerMock(mock_failed_login_response)
         )
 
@@ -186,6 +186,7 @@ async def test_parse_delivery_info():
         <body>
             <div class="delivery">
                 <p>Next delivery: 15 January 2024</p>
+                <p>Delivery slot: 10:00 - 12:00</p>
                 <p>Order #123456</p>
             </div>
         </body>
@@ -196,6 +197,7 @@ async def test_parse_delivery_info():
 
     assert info["order_number"] == "123456"
     assert info["delivery_slot"] is not None
+    assert info["next_delivery"] is not None
 
 
 @pytest.mark.asyncio
@@ -205,20 +207,16 @@ async def test_get_data(mock_account_page_response, mock_basket_response):
     api._logged_in = True
 
     with patch("aiohttp.ClientSession") as mock_session_class:
-        mock_session = AsyncMock()
+        mock_session = MagicMock()
         mock_session.closed = False
         mock_session_class.return_value = mock_session
         api._session = mock_session
 
-        # Mock account page request
-        mock_get_account = AsyncMock()
-        mock_get_account.__aenter__.return_value = mock_account_page_response
-
-        # Mock basket page request
-        mock_get_basket = AsyncMock()
-        mock_get_basket.__aenter__.return_value = mock_basket_response
-
-        mock_session.get.side_effect = [mock_get_account, mock_get_basket]
+        # Mock account page and basket page requests
+        mock_session.get.side_effect = [
+            AsyncContextManagerMock(mock_account_page_response),
+            AsyncContextManagerMock(mock_basket_response),
+        ]
 
         data = await api.async_get_data()
 
@@ -234,14 +232,14 @@ async def test_search_products(mock_product_search_response):
     api._logged_in = True
 
     with patch("aiohttp.ClientSession") as mock_session_class:
-        mock_session = AsyncMock()
+        mock_session = MagicMock()
         mock_session.closed = False
         mock_session_class.return_value = mock_session
         api._session = mock_session
 
-        mock_get = AsyncMock()
-        mock_get.__aenter__.return_value = mock_product_search_response
-        mock_session.get.return_value = mock_get
+        mock_session.get = MagicMock(
+            return_value=AsyncContextManagerMock(mock_product_search_response)
+        )
 
         products = await api.async_search_products("milk")
 
@@ -258,16 +256,19 @@ async def test_add_to_basket():
     api._csrf_token = "test_token"
 
     with patch("aiohttp.ClientSession") as mock_session_class:
-        mock_session = AsyncMock()
+        mock_session = MagicMock()
         mock_session.closed = False
         mock_session_class.return_value = mock_session
         api._session = mock_session
 
-        mock_response = AsyncMock()
+        mock_response = MagicMock()
         mock_response.status = 200
-        mock_post = AsyncMock()
-        mock_post.__aenter__.return_value = mock_response
-        mock_session.post.return_value = mock_post
+        mock_response.text = AsyncMock(return_value='{"success": true}')
+        mock_response.json = AsyncMock(return_value={"success": True})
+
+        mock_session.post = MagicMock(
+            return_value=AsyncContextManagerMock(mock_response)
+        )
 
         result = await api.async_add_to_basket("12345", 2)
 
@@ -282,14 +283,14 @@ async def test_get_basket(mock_basket_response):
     api._logged_in = True
 
     with patch("aiohttp.ClientSession") as mock_session_class:
-        mock_session = AsyncMock()
+        mock_session = MagicMock()
         mock_session.closed = False
         mock_session_class.return_value = mock_session
         api._session = mock_session
 
-        mock_get = AsyncMock()
-        mock_get.__aenter__.return_value = mock_basket_response
-        mock_session.get.return_value = mock_get
+        mock_session.get = MagicMock(
+            return_value=AsyncContextManagerMock(mock_basket_response)
+        )
 
         items = await api.async_get_basket()
 

@@ -92,6 +92,7 @@ async def test_inventory_add_items(mock_hass, mock_coordinator, mock_entry):
     """Test adding items to inventory."""
     sensor = TescoInventorySensor(mock_hass, mock_coordinator, mock_entry)
     sensor.hass = mock_hass  # Set hass attribute for entity
+    sensor.entity_id = "sensor.test_inventory"  # Set entity_id to avoid NoEntitySpecifiedError
 
     items = [
         {"id": "milk_2l", "name": "Milk 2L", "quantity": 2, "unit": "liters"},
@@ -111,6 +112,7 @@ async def test_inventory_add_duplicate_items(mock_hass, mock_coordinator, mock_e
     """Test adding duplicate items increases quantity."""
     sensor = TescoInventorySensor(mock_hass, mock_coordinator, mock_entry)
     sensor.hass = mock_hass  # Set hass attribute for entity
+    sensor.entity_id = "sensor.test_inventory"  # Set entity_id to avoid NoEntitySpecifiedError
 
     # Add first batch
     items1 = [{"id": "milk_2l", "name": "Milk 2L", "quantity": 2}]
@@ -131,6 +133,7 @@ async def test_inventory_remove_item(mock_hass, mock_coordinator, mock_entry):
     """Test removing items from inventory."""
     sensor = TescoInventorySensor(mock_hass, mock_coordinator, mock_entry)
     sensor.hass = mock_hass  # Set hass attribute for entity
+    sensor.entity_id = "sensor.test_inventory"  # Set entity_id to avoid NoEntitySpecifiedError
 
     # Add items first
     items = [{"id": "milk_2l", "name": "Milk 2L", "quantity": 3}]
@@ -150,6 +153,7 @@ async def test_inventory_attributes(mock_hass, mock_coordinator, mock_entry):
     """Test inventory sensor attributes."""
     sensor = TescoInventorySensor(mock_hass, mock_coordinator, mock_entry)
     sensor.hass = mock_hass  # Set hass attribute for entity
+    sensor.entity_id = "sensor.test_inventory"  # Set entity_id to avoid NoEntitySpecifiedError
 
     items = [{"id": "milk_2l", "name": "Milk 2L", "quantity": 2}]
     await sensor.async_add_items_from_receipt(items)
