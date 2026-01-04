@@ -1,0 +1,19 @@
+# Testing requirements
+pytest>=8.0.0  # Version required by pytest-homeassistant-custom-component
+pytest-asyncio>=0.23.0  # Required by pytest-homeassistant-custom-component
+pytest-cov>=4.1.0
+pytest-homeassistant-custom-component==0.13.106
+
+# Integration dependencies (must match manifest.json)
+aiohttp>=3.9.0
+beautifulsoup4>=4.11.0
+lxml>=4.9.0
+
+# Additional test utilities
+aioresponses==0.7.6
+
+# Code quality tools
+ruff>=0.1.0
+black>=23.0.0
+isort>=5.12.0
+mypy>=1.0.0

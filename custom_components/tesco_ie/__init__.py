@@ -1,0 +1,450 @@
+"""The Tesco Ireland integration."""
+
+from __future__ import annotations
+
+import logging
+from datetime import timedelta
+
+import voluptuous as vol
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+
+from .const import (
+    CONF_EMAIL,
+    CONF_PASSWORD,
+    CONF_RATE_LIMIT_READ,
+    CONF_RATE_LIMIT_WRITE,
+    CONF_TIMEOUT,
+    CONF_UPDATE_INTERVAL,
+    DEFAULT_RATE_LIMIT_READ,
+    DEFAULT_RATE_LIMIT_WRITE,
+    DEFAULT_TIMEOUT,
+    DEFAULT_UPDATE_INTERVAL,
+    DOMAIN,
+    MAX_PRODUCT_NAME_LENGTH,
+    MAX_QUANTITY,
+    SERVICE_ADD_TO_BASKET,
+    SERVICE_INGEST_RECEIPT,
+    SERVICE_REMOVE_FROM_INVENTORY,
+    SERVICE_SEARCH_PRODUCTS,
+)
+from .tesco_api import TescoAPI, TescoAPIError, TescoAuthError
+
+_LOGGER = logging.getLogger(__name__)
+
+PLATFORMS: list[Platform] = [Platform.SENSOR]
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up Tesco Ireland from a config entry."""
+    # Note: Home Assistant encrypts config entry data automatically
+    # Passwords are not stored in plaintext in storage
+    email = entry.data[CONF_EMAIL]
+    password = entry.data[CONF_PASSWORD]
+
+    # Get configuration options with defaults
+    timeout = entry.options.get(CONF_TIMEOUT, DEFAULT_TIMEOUT)
+    update_interval = entry.options.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
+
+    # Get rate limits from options
+    rate_limit_read = entry.options.get(CONF_RATE_LIMIT_READ, DEFAULT_RATE_LIMIT_READ)
+    rate_limit_write = entry.options.get(
+        CONF_RATE_LIMIT_WRITE, DEFAULT_RATE_LIMIT_WRITE
+    )
+
+    _LOGGER.debug(
+        "Setting up Tesco integration with timeout=%ds, update_interval=%ds, "
+        "rate_limit_read=%ss, rate_limit_write=%ss",
+        timeout,
+        update_interval,
+        rate_limit_read,
+        rate_limit_write,
+    )
+
+    # Create API instance with rate limits as instance attributes
+    api = TescoAPI(
+        email,
+        password,
+        timeout=timeout,
+        rate_limit_read=rate_limit_read,
+        rate_limit_write=rate_limit_write,
+    )
+
+    try:
+        await api.async_login()
+    except (TescoAuthError, TescoAPIError) as err:
+        _LOGGER.error("Failed to authenticate with Tesco")
+        # Clean up API session on failed login
+        await api.async_close()
+        raise ConfigEntryAuthFailed from err
+
+    async def async_update_data():
+        """Fetch data from Tesco API."""
+        try:
+            return await api.async_get_data()
+        except TescoAuthError:
+            # Auth failures during updates should trigger re-login
+            _LOGGER.warning("Authentication expired, attempting re-login")
+            try:
+                await api.async_login()
+                return await api.async_get_data()
+            except (TescoAuthError, TescoAPIError) as retry_err:
+                raise UpdateFailed(
+                    f"Re-authentication failed: {retry_err}"
+                ) from retry_err
+        except TescoAPIError as err:
+            raise UpdateFailed(f"API error: {err}") from err
+        except Exception as err:
+            _LOGGER.exception("Unexpected error fetching data")
+            raise UpdateFailed(f"Unexpected error: {err}") from err
+
+    coordinator = DataUpdateCoordinator(
+        hass,
+        _LOGGER,
+        name=DOMAIN,
+        update_method=async_update_data,
+        update_interval=timedelta(seconds=update_interval),
+    )
+
+    _LOGGER.debug("Coordinator created with %ds update interval", update_interval)
+
+    await coordinator.async_config_entry_first_refresh()
+
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][entry.entry_id] = {
+        "coordinator": coordinator,
+        "api": api,
+    }
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Register services globally (only once)
+    await async_setup_services(hass)
+
+    # Listen for options updates
+    entry.async_on_unload(entry.add_update_listener(async_update_options))
+
+    _LOGGER.info("Tesco Ireland integration setup complete for %s", email)
+
+    return True
+
+
+async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Update options."""
+    _LOGGER.info("Reloading Tesco Ireland integration due to options change")
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def async_setup_services(hass: HomeAssistant) -> None:
+    """Set up services for Tesco integration (global, not per-entry)."""
+    # Use thread-safe service check to prevent race conditions
+    if hass.services.has_service(DOMAIN, SERVICE_ADD_TO_BASKET):
+        return
+
+    async def handle_add_to_basket(call: ServiceCall) -> None:
+        """Handle add to basket service."""
+        product_name = call.data.get("product_name")
+        quantity = call.data.get("quantity", 1)
+        entry_id = call.data.get("entry_id")
+
+        # Validate and sanitize product_name
+        if not product_name or not isinstance(product_name, str):
+            _LOGGER.error("Invalid product_name: must be a non-empty string")
+            return
+
+        # Sanitize product name: remove excessive whitespace and limit length
+        product_name = " ".join(product_name.split())
+        if len(product_name) > MAX_PRODUCT_NAME_LENGTH:
+            _LOGGER.warning(
+                "Product name too long, truncating to %d characters",
+                MAX_PRODUCT_NAME_LENGTH,
+            )
+            product_name = product_name[:MAX_PRODUCT_NAME_LENGTH]
+
+        # Validate characters (allow alphanumeric, spaces, and common punctuation)
+        # Removed % to prevent potential URL encoding injection attacks
+        if not all(c.isalnum() or c.isspace() or c in "'-.,&()" for c in product_name):
+            _LOGGER.error("Product name contains invalid characters")
+            return
+
+        # Validate quantity
+        if not isinstance(quantity, int) or quantity < 1 or quantity > MAX_QUANTITY:
+            _LOGGER.error("Invalid quantity: must be between 1 and %d", MAX_QUANTITY)
+            return
+
+        # Get API instance - use specified entry_id or first available
+        if entry_id:
+            if entry_id not in hass.data.get(DOMAIN, {}):
+                _LOGGER.error("Config entry %s not found", entry_id)
+                return
+            api = hass.data[DOMAIN][entry_id]["api"]
+        else:
+            # Get first available entry
+            entries = {
+                k: v
+                for k, v in hass.data.get(DOMAIN, {}).items()
+                if isinstance(v, dict) and "api" in v
+            }
+            if not entries:
+                _LOGGER.error("No Tesco integration configured")
+                return
+            api = next(iter(entries.values()))["api"]
+
+        # Search for product
+        try:
+            products = await api.async_search_products(product_name)
+            if products:
+                result = await api.async_add_to_basket(products[0]["id"], quantity)
+                if result["success"]:
+                    _LOGGER.info("Added item to basket")
+                else:
+                    # Create persistent notification for failure
+                    hass.components.persistent_notification.async_create(
+                        f"Failed to add '{product_name}' to basket: {result['message']}",
+                        title="Tesco Basket Error",
+                        notification_id=f"tesco_basket_error_{entry_id or 'default'}",
+                    )
+                    _LOGGER.error("Failed to add to basket: %s", result["message"])
+            else:
+                # Create persistent notification for product not found
+                hass.components.persistent_notification.async_create(
+                    f"Product '{product_name}' not found in search results. "
+                    "Please verify the product name.",
+                    title="Tesco Product Not Found",
+                    notification_id=f"tesco_product_not_found_{entry_id or 'default'}",
+                )
+                _LOGGER.warning("Product not found: %s", product_name)
+        except (TescoAuthError, TescoAPIError) as err:
+            # Create persistent notification for API errors
+            hass.components.persistent_notification.async_create(
+                f"Error adding '{product_name}' to basket: {err}",
+                title="Tesco API Error",
+                notification_id=f"tesco_api_error_{entry_id or 'default'}",
+            )
+            _LOGGER.error("Failed to add to basket: %s", err)
+
+    async def handle_ingest_receipt(call: ServiceCall) -> None:
+        """Handle receipt ingestion service."""
+        items = call.data.get("items", [])
+        entry_id = call.data.get("entry_id")
+
+        if not items:
+            _LOGGER.warning("No items provided in receipt")
+            return
+
+        # Validate item structure
+        for item in items:
+            if not isinstance(item, dict) or "name" not in item:
+                _LOGGER.error("Invalid item structure: missing 'name' field")
+                return
+
+        # Get inventory sensor - use specified entry_id or first available
+        if entry_id:
+            if entry_id not in hass.data.get(DOMAIN, {}):
+                _LOGGER.error("Config entry %s not found", entry_id)
+                return
+            entry_data = hass.data[DOMAIN][entry_id]
+        else:
+            # Get first available entry with inventory sensor
+            entries = {
+                k: v
+                for k, v in hass.data.get(DOMAIN, {}).items()
+                if isinstance(v, dict) and "inventory_sensor" in v
+            }
+            if not entries:
+                _LOGGER.error("No inventory sensor found")
+                return
+            entry_data = next(iter(entries.values()))
+
+        if "inventory_sensor" in entry_data:
+            sensor = entry_data["inventory_sensor"]
+            await sensor.async_add_items_from_receipt(items)
+            _LOGGER.info("Added %d items to inventory", len(items))
+        else:
+            _LOGGER.error("No inventory sensor found")
+
+    async def handle_remove_from_inventory(call: ServiceCall) -> None:
+        """Handle remove from inventory service."""
+        product_id = call.data.get("product_id")
+        quantity = call.data.get("quantity", 1)
+        entry_id = call.data.get("entry_id")
+
+        # Validate product_id
+        if not product_id or not isinstance(product_id, str):
+            _LOGGER.error("Invalid product_id: must be a non-empty string")
+            return
+
+        # Sanitize product_id and limit length
+        product_id = product_id.strip()
+        if len(product_id) > 100:
+            _LOGGER.error("Product ID too long (max 100 characters)")
+            return
+
+        # Validate characters (allow alphanumeric, underscores, hyphens)
+        if not all(c.isalnum() or c in "_-" for c in product_id):
+            _LOGGER.error("Product ID contains invalid characters")
+            return
+
+        # Validate quantity
+        if not isinstance(quantity, int) or quantity < 1 or quantity > 99:
+            _LOGGER.error("Invalid quantity: must be between 1 and 99")
+            return
+
+        # Get inventory sensor - use specified entry_id or first available
+        if entry_id:
+            if entry_id not in hass.data.get(DOMAIN, {}):
+                _LOGGER.error("Config entry %s not found", entry_id)
+                return
+            entry_data = hass.data[DOMAIN][entry_id]
+        else:
+            # Get first available entry with inventory sensor
+            entries = {
+                k: v
+                for k, v in hass.data.get(DOMAIN, {}).items()
+                if isinstance(v, dict) and "inventory_sensor" in v
+            }
+            if not entries:
+                _LOGGER.error("No inventory sensor found")
+                return
+            entry_data = next(iter(entries.values()))
+
+        if "inventory_sensor" in entry_data:
+            sensor = entry_data["inventory_sensor"]
+            await sensor.async_remove_item(product_id, quantity)
+            _LOGGER.info("Removed item from inventory")
+        else:
+            _LOGGER.error("No inventory sensor found")
+
+    async def handle_search_products(call: ServiceCall) -> None:
+        """Handle product search service."""
+        query = call.data.get("query")
+        entry_id = call.data.get("entry_id")
+
+        # Validate and sanitize query
+        if not query or not isinstance(query, str):
+            _LOGGER.error("Invalid query: must be a non-empty string")
+            return
+
+        # Sanitize query: remove excessive whitespace and limit length
+        query = " ".join(query.split())
+        if len(query) > MAX_PRODUCT_NAME_LENGTH:
+            _LOGGER.warning(
+                "Query too long, truncating to %d characters", MAX_PRODUCT_NAME_LENGTH
+            )
+            query = query[:MAX_PRODUCT_NAME_LENGTH]
+
+        # Validate characters
+        # Removed % to prevent potential URL encoding injection attacks
+        if not all(c.isalnum() or c.isspace() or c in "'-.,&()" for c in query):
+            _LOGGER.error("Query contains invalid characters")
+            return
+
+        # Get API instance - use specified entry_id or first available
+        if entry_id:
+            if entry_id not in hass.data.get(DOMAIN, {}):
+                _LOGGER.error("Config entry %s not found", entry_id)
+                return
+            api = hass.data[DOMAIN][entry_id]["api"]
+        else:
+            # Get first available entry
+            entries = {
+                k: v
+                for k, v in hass.data.get(DOMAIN, {}).items()
+                if isinstance(v, dict) and "api" in v
+            }
+            if not entries:
+                _LOGGER.error("No Tesco integration configured")
+                return
+            api = next(iter(entries.values()))["api"]
+
+        try:
+            products = await api.async_search_products(query)
+            _LOGGER.info("Found %d products", len(products))
+            # Store results for potential retrieval
+            hass.data[DOMAIN]["last_search_results"] = products
+        except (TescoAuthError, TescoAPIError) as err:
+            _LOGGER.error("Failed to search products: %s", err)
+
+    # Register services (only once globally)
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_ADD_TO_BASKET,
+        handle_add_to_basket,
+        schema=vol.Schema(
+            {
+                vol.Required("product_name"): cv.string,
+                vol.Optional("quantity", default=1): cv.positive_int,
+                vol.Optional("entry_id"): cv.string,
+            }
+        ),
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_INGEST_RECEIPT,
+        handle_ingest_receipt,
+        schema=vol.Schema(
+            {
+                vol.Required("items"): [
+                    {
+                        vol.Required("name"): cv.string,
+                        vol.Optional("id"): cv.string,
+                        vol.Optional("quantity", default=1): cv.positive_int,
+                        vol.Optional("unit", default="item"): cv.string,
+                    }
+                ],
+                vol.Optional("entry_id"): cv.string,
+            }
+        ),
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_REMOVE_FROM_INVENTORY,
+        handle_remove_from_inventory,
+        schema=vol.Schema(
+            {
+                vol.Required("product_id"): cv.string,
+                vol.Optional("quantity", default=1): cv.positive_int,
+                vol.Optional("entry_id"): cv.string,
+            }
+        ),
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SEARCH_PRODUCTS,
+        handle_search_products,
+        schema=vol.Schema(
+            {
+                vol.Required("query"): cv.string,
+                vol.Optional("entry_id"): cv.string,
+            }
+        ),
+    )
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload a config entry."""
+    # Close API session to prevent resource leak
+    if entry.entry_id in hass.data.get(DOMAIN, {}):
+        api = hass.data[DOMAIN][entry.entry_id]["api"]
+        await api.async_close()
+
+    if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        hass.data[DOMAIN].pop(entry.entry_id)
+
+    # Unregister services if this was the last entry
+    if not any(
+        isinstance(v, dict) and "api" in v for v in hass.data.get(DOMAIN, {}).values()
+    ):
+        hass.services.async_remove(DOMAIN, SERVICE_ADD_TO_BASKET)
+        hass.services.async_remove(DOMAIN, SERVICE_INGEST_RECEIPT)
+        hass.services.async_remove(DOMAIN, SERVICE_REMOVE_FROM_INVENTORY)
+        hass.services.async_remove(DOMAIN, SERVICE_SEARCH_PRODUCTS)
+
+    return unload_ok
