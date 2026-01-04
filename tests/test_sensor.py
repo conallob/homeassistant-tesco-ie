@@ -45,6 +45,7 @@ def mock_hass():
     """Mock Home Assistant instance."""
     hass = MagicMock(spec=HomeAssistant)
     hass.data = {}
+    hass.states = MagicMock()
     return hass
 
 
