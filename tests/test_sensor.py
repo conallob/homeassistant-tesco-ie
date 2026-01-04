@@ -43,7 +43,9 @@ def mock_entry():
 @pytest.fixture
 def mock_hass():
     """Mock Home Assistant instance."""
-    return MagicMock(spec=HomeAssistant)
+    hass = MagicMock(spec=HomeAssistant)
+    hass.data = {}
+    return hass
 
 
 def test_clubcard_sensor_initialization(mock_coordinator, mock_entry):
