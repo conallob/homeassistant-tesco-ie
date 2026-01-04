@@ -406,7 +406,9 @@ class TescoAPI:
                             self._failed_login_attempts,
                             response.status,
                         )
-                        raise TescoAuthError(f"Login failed with status: {response.status}")
+                        raise TescoAuthError(
+                            f"Login failed with status: {response.status}"
+                        )
             except (aiohttp.ClientError, TescoAuthError):
                 # Clean up session on error
                 if self._session and not self._session.closed:
@@ -423,13 +425,13 @@ class TescoAPI:
         except TescoAuthError:
             # Re-raise TescoAuthError without incrementing counter again
             raise
-        except (BeautifulSoup, ValueError) as err:
-            # Handle specific parsing errors
+        except (AttributeError, KeyError, TypeError, ValueError) as err:
+            # Handle HTML parsing errors
             self._failed_login_attempts += 1
             _LOGGER.error(
                 "HTML parsing error during login (attempt %d): %s",
                 self._failed_login_attempts,
-                err
+                err,
             )
             raise TescoAuthError(f"Failed to parse login response: {err}") from err
 

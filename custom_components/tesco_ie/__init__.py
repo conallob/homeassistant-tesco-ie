@@ -159,7 +159,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         if len(product_name) > MAX_PRODUCT_NAME_LENGTH:
             _LOGGER.warning(
                 "Product name too long, truncating to %d characters",
-                MAX_PRODUCT_NAME_LENGTH
+                MAX_PRODUCT_NAME_LENGTH,
             )
             product_name = product_name[:MAX_PRODUCT_NAME_LENGTH]
 
@@ -331,8 +331,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         query = " ".join(query.split())
         if len(query) > MAX_PRODUCT_NAME_LENGTH:
             _LOGGER.warning(
-                "Query too long, truncating to %d characters",
-                MAX_PRODUCT_NAME_LENGTH
+                "Query too long, truncating to %d characters", MAX_PRODUCT_NAME_LENGTH
             )
             query = query[:MAX_PRODUCT_NAME_LENGTH]
 
@@ -425,7 +424,6 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             }
         ),
     )
-
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
