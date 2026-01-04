@@ -18,6 +18,7 @@ import logging
 import re
 import time
 from typing import Any, TypedDict
+from urllib.parse import quote
 
 import aiohttp
 from aiohttp import CookieJar
@@ -374,8 +375,6 @@ class TescoAPI:
                         if found_indicators:
                             self._logged_in = True
                             self._failed_login_attempts = 0  # Reset on success
-                            # Clear password from memory after successful login for security
-                            self.password = None
                             _LOGGER.info("Successfully authenticated")
                             _LOGGER.debug(
                                 "Login verified by indicators: %s",
@@ -570,7 +569,8 @@ class TescoAPI:
         try:
             await self._rate_limit()
 
-            search_url = f"{TESCO_SEARCH_URL}?query={query}"
+            # URL encode the query to prevent injection attacks
+            search_url = f"{TESCO_SEARCH_URL}?query={quote(query)}"
 
             async with self._session.get(search_url) as response:
                 if response.status == 200:
@@ -658,7 +658,11 @@ class TescoAPI:
         try:
             await self._rate_limit(is_write=True)  # Use write rate limit
 
-            # Prepare basket addition request
+            # IMPORTANT: This assumes Tesco.ie has a JSON API endpoint for basket operations.
+            # This may not exist on the actual site. If this fails, you'll need to:
+            # 1. Inspect the actual basket add mechanism using browser dev tools
+            # 2. Update this to use the correct endpoint and request format
+            # 3. May need to submit a form POST instead of JSON
             basket_add_url = f"{TESCO_GROCERIES_URL}/api/basket/add"
 
             data = {
