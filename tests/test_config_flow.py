@@ -127,9 +127,9 @@ async def test_duplicate_entry(hass: HomeAssistant, mock_tesco_api):
         def abort_duplicate():
             raise data_entry_flow.AbortFlow("already_configured")
 
-        with patch.object(flow2, 'async_set_unique_id'), \
-             patch.object(flow2, '_abort_if_unique_id_configured', side_effect=abort_duplicate):
-            result2 = await flow2.async_step_user(user_input=entry_data)
+        with pytest.raises(data_entry_flow.AbortFlow) as exc_info:
+            with patch.object(flow2, 'async_set_unique_id'), \
+                 patch.object(flow2, '_abort_if_unique_id_configured', side_effect=abort_duplicate):
+                await flow2.async_step_user(user_input=entry_data)
 
-        assert result2["type"] == data_entry_flow.FlowResultType.ABORT
-        assert result2["reason"] == "already_configured"
+        assert exc_info.value.reason == "already_configured"
